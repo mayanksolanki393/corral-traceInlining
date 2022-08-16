@@ -1459,11 +1459,22 @@ namespace CoreLib
             return query;
         }
 
+        public VCExpr ComputeSummary(StratifiedCallSite callsite) {
+            VCExpr summary = summaryDBDummy[GetPersistentID(callsite)];
+
+            foreach (var childCallSite in childrenOf[callsite]) {
+                if (summaryDBDummy.ContainsKey(GetPersistentID(childCallSite)))
+                    summary = prover.VCExprGen.And(summary, ComputeSummary(childCallSite));
+            }
+
+            return summary;
+        }
+        
+        public Dictionary<string, VCExpr> summaryDBDummy = new Dictionary<string, VCExpr>();
+        public Dictionary<StratifiedCallSite, List<StratifiedCallSite>> childrenOf = new Dictionary<StratifiedCallSite, List<StratifiedCallSite>>();
         public Outcome TraceInlining(HashSet<StratifiedCallSite> openCallSites, StratifiedInliningErrorReporter reporter, bool main, int recBound)
         {
-            
-            Console.WriteLine("Info: Running Trace Inlining");
-            SiState originalState = SiState.SaveState(this, openCallSites);
+            Console.WriteLine("Trace Inlining - Start");
             Outcome outcome = Outcome.Inconclusive;
             DateTime qStartTime;
             
@@ -1478,42 +1489,43 @@ namespace CoreLib
             HashSet<StratifiedCallSite> nextOpenCallSites = new HashSet<StratifiedCallSite>(openCallSites);
 
             Dictionary<StratifiedCallSite, string> callsite2proverName = new Dictionary<StratifiedCallSite, string>();
-            Dictionary<string, VCExpr> summaryDBDummy = new Dictionary<string, VCExpr>();
+            summaryDBDummy = new Dictionary<string, VCExpr>();
+            childrenOf = new Dictionary<StratifiedCallSite, List<StratifiedCallSite>>();
             
             var boundHit = false;
+
             while (true)
             {
-                Console.WriteLine("-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-");
-                Console.WriteLine("All Open Callsites:");
-                foreach (var cs in openCallSites) {
-                    Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                }
-                Console.WriteLine("All Blocked Callsites:");
-                foreach (var cs in blockedCallSites) {
-                    Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                }
-                Console.WriteLine("All Inlined Callsites:");
-                foreach (var cs in inlinedCallSites) {
-                    Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                }
-                Console.WriteLine("Last Inlined Callsites:");
-                foreach (var cs in lastInlinedCallSites) {
-                    Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                }
-                Console.WriteLine("Last Blocked Callsites:");
-                foreach (var cs in lastBlockedCallSites) {
-                    Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                }
-                Console.WriteLine("Next Open Callsites:");
-                foreach (var cs in nextOpenCallSites) {
-                    Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                }
-                
-                Console.WriteLine("Prover State:");
-                foreach (var key in callsite2proverName.Keys) {
-                    Console.WriteLine("{0} -> {1}", GetPersistentID(key), callsite2proverName[key]);
-                }
-                Console.WriteLine("-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-");
+                // Console.WriteLine("-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-");
+                // Console.WriteLine("All Open Callsites:");
+                // foreach (var cs in openCallSites) {
+                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
+                // }
+                // Console.WriteLine("All Blocked Callsites:");
+                // foreach (var cs in blockedCallSites) {
+                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
+                // }
+                // Console.WriteLine("All Inlined Callsites:");
+                // foreach (var cs in inlinedCallSites) {
+                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
+                // }
+                // Console.WriteLine("Last Inlined Callsites:");
+                // foreach (var cs in lastInlinedCallSites) {
+                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
+                // }
+                // Console.WriteLine("Last Blocked Callsites:");
+                // foreach (var cs in lastBlockedCallSites) {
+                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
+                // }
+                // Console.WriteLine("Next Open Callsites:");
+                // foreach (var cs in nextOpenCallSites) {
+                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
+                // }
+                // Console.WriteLine("Prover State:");
+                // foreach (var key in callsite2proverName.Keys) {
+                //     Console.WriteLine("{0} -> {1}", GetPersistentID(key), callsite2proverName[key]);
+                // }
+                // Console.WriteLine("-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-");
 
                 // Check timeout
                 if (CommandLineOptions.Clo.ProverKillTime != -1)
@@ -1525,15 +1537,29 @@ namespace CoreLib
                 }
 
                 // Bound on max procs inlined
-                // We will have to handle this differently
                 if (BoogieVerify.options.maxInlinedBound != 0 &&
                     stats.numInlined > BoogieVerify.options.maxInlinedBound)
                 {
                     return Outcome.ReachedBound;
                 }
 
+                // underapproximate query
+                prover.LogComment("Running underapprox query - start");
+                Push();
+                foreach (StratifiedCallSite cs in openCallSites)
+                {
+                    prover.Assert(cs.callSiteExpr, false);
+                }
+                MacroSI.PRINT_DEBUG("    - check");
+                reporter.reportTrace = main;
+                outcome = CheckVC(reporter);
+                Pop();
+                prover.LogComment("Running underapprox query - end - Outcome: "+ outcome);
+                MacroSI.PRINT_DEBUG("    - checked: " + outcome);
+                if (outcome != Outcome.Correct) break;
+
                 // overapproximate query
-                prover.LogComment("Running overapprox query");
+                prover.LogComment("Running overapprox query - start");
                 Push();
                 var softAssumptions = new List<VCExpr>();
                 foreach (StratifiedCallSite cs in openCallSites)
@@ -1544,35 +1570,39 @@ namespace CoreLib
                         (CommandLineOptions.Clo.StackDepthBound > 0 &&
                         StackDepth(cs) > CommandLineOptions.Clo.StackDepthBound))
                     {
+                        Console.WriteLine("Info: Blocking: RecurBoundReached: {0}", GetPersistentID(cs));
+                        prover.LogComment("Blocking: RecurBoundReached: "+ GetPersistentID(cs));
                         prover.Assert(cs.callSiteExpr, false);
                         procsHitRecBound.Add(cs.callSite.calleeName);
-                        //Console.WriteLine("Proc {0} hit rec bound of {1}", cs.callSite.calleeName, recBound);
+                        Console.WriteLine("Proc {0} hit rec bound of {1}", cs.callSite.calleeName, recBound);
                         boundHit = true;
                     }
-                    // Non-uniform unfolding
-                    if (BoogieVerify.options.NonUniformUnfolding && RecursionDepth(cs) > 1)
-                        softAssumptions.Add(prover.VCExprGen.Not(cs.callSiteExpr));
                 }
 
                 Console.WriteLine("Info: Running overapprox query");
-                reporter.reportTrace = true;
+                reporter.reportTrace = false;
+                reporter.reportTraceIfNothingToExpand = true;
                 reporter.callSitesToExpand = new List<StratifiedCallSite>();
                 qStartTime = DateTime.Now;
-                outcome = BoogieVerify.options.NonUniformUnfolding ? CheckVC(softAssumptions, reporter) : CheckVC(reporter);
+                outcome = CheckVC(reporter);
                 
                 Console.WriteLine("Info:OQ Outcome: " + outcome);
                 Console.WriteLine("Info:OQ Time: " + (DateTime.Now - qStartTime).TotalMilliseconds);
 
                 if (outcome == Outcome.Errors)
                 {
-                    //If trace reports nothing we are done
-                    if (reporter.callSitesToExpand.Count == 0)
+                    Console.WriteLine("callSitsToExpand.Count=" + reporter.callSitesToExpand.Count);
+                    
+                    if (reporter.callSitesToExpand.Count == 0) {
+                        outcome = Outcome.Inconclusive;
                         break;
+                    }
 
                     //save current solver state and partition state
                     partitionStack.Push(SiState2.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites));
 
                     Pop(); // Pops the over approx part
+                    prover.LogComment("Running overapprox query - end - Outcome: "+ outcome);
                     Push(); // For next level of inlining
 
                     var toExpand = reporter.callSitesToExpand;
@@ -1582,14 +1612,21 @@ namespace CoreLib
                         toExpand = toExpand.Where(cs => RecursionDepth(cs) == min).ToList();
                     }
 
-                    HashSet<StratifiedCallSite> nextnextOpenCallsites = new HashSet<StratifiedCallSite>();
-                    lastBlockedCallSites.Clear();
-                    lastInlinedCallSites.Clear();
-                    foreach (StratifiedCallSite scs in nextOpenCallSites)
-                    {
-                        // Not sure if this needs to be kept
-                        openCallSites.Remove(scs);
+                    System.Diagnostics.Contracts.Contract.Assert(toExpand.Count > 0);
 
+                    Console.WriteLine("Callsites in toExpand:");
+                    foreach (var cs in toExpand) {
+                        Console.WriteLine("\t - {0}", GetPersistentID(cs));
+                    }
+
+                    lastInlinedCallSites.Clear();
+                    lastBlockedCallSites.Clear();
+                    HashSet<StratifiedCallSite> nextnextOpenCallsites = new HashSet<StratifiedCallSite>();
+                    HashSet<StratifiedCallSite> availableCallsites = new HashSet<StratifiedCallSite>();
+                    availableCallsites.UnionWith(openCallSites);
+                    //availableCallsites.ExceptWith(blockedCallSites);
+                    foreach (StratifiedCallSite scs in availableCallsites)
+                    {
                         //Inline Callsite
                         if (toExpand.Contains(scs))
                         {
@@ -1602,14 +1639,23 @@ namespace CoreLib
                                 inlinedCallSites.Add(scs);
                                 nextnextOpenCallsites.UnionWith(svc.CallSites);
                                 openCallSites.UnionWith(svc.CallSites);
+                                openCallSites.Remove(scs);
 
                                 callsite2proverName[scs] = "inlined_" + scs.callSiteExpr.ToString();
 
                                 if (cba.Util.BoogieVerify.options.useFwdBck) MustNotFail(scs, svc);
                             }
                         }
+                        else if (blockedCallSites.Contains(scs)) {
+                            //ignore
+                        }
+                        // else if (summaryDBDummy.ContainsKey(GetPersistentID(scs))) {
+                        //     var summary = summaryDBDummy[GetPersistentID(scs)];
+                        //     prover.AssertNamed(summary, true, "summ_" + scs.callSiteExpr);
+                        // }
                         //Block CallSite
                         else {
+                            Console.WriteLine("Info: Blocking: {0} - {1}", scs.callSiteExpr, GetPersistentID(scs));
                             prover.LogComment("blocking " + scs.callSite.calleeName + " from " + parent[scs].callSite.calleeName);
                             lastBlockedCallSites.Add(scs);
                             blockedCallSites.Add(scs);
@@ -1620,130 +1666,145 @@ namespace CoreLib
                     }
                     nextOpenCallSites = nextnextOpenCallsites;
                 }
-                else // outcome == Correct
+                else // outcome != Errors
                 {
-                    if (partitionStack.Count == 1)
+                    if (partitionStack.Count <= 1)
                     {
-                        if (outcome == Outcome.Correct)
-                        {
-                            if (boundHit)
-                                return Outcome.ReachedBound;
-                            else
-                                return Outcome.Correct;
-                        }
-                        else
-                            return Outcome.Inconclusive;
+                        if (boundHit && outcome == Outcome.Correct)
+                            outcome = Outcome.ReachedBound;
+
+                        break; // done
                     }
                     else
                     {
-                        Console.WriteLine("Info: Getting Interpolants");
-                        List<string> root = new List<string>();
-                        List<string> leaves = new List<string>();
-                        List<VCExpr> summaries = new List<VCExpr>();
+                        // // Console.WriteLine("Info: Getting Interpolants");
+                        // // List<string> root = new List<string>();
+                        // // List<string> leaves = new List<string>();
+                        // // List<VCExpr> summaries = new List<VCExpr>();
 
-                        HashSet<StratifiedCallSite> rootNodes = new HashSet<StratifiedCallSite>();
-                        rootNodes.UnionWith(blockedCallSites);
-                        rootNodes.UnionWith(inlinedCallSites);
-                        rootNodes.ExceptWith(lastInlinedCallSites);
+                        // // HashSet<StratifiedCallSite> rootNodes = new HashSet<StratifiedCallSite>();
+                        // // rootNodes.UnionWith(blockedCallSites);
+                        // // rootNodes.UnionWith(inlinedCallSites);
+                        // // rootNodes.ExceptWith(lastInlinedCallSites);
 
-                        Console.WriteLine("Root:");
-                        foreach (StratifiedCallSite cs in rootNodes) {
-                            Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                            root.Add(callsite2proverName[cs]);    
-                        }
+                        // // Console.WriteLine("Root:");
+                        // // foreach (StratifiedCallSite cs in rootNodes) {
+                        // //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
+                        // //     root.Add(callsite2proverName[cs]);    
+                        // // }
                             
+                        // // List<StratifiedCallSite> leafNodes = lastInlinedCallSites.ToList();
+                        // // Console.WriteLine("Leaves:");
+                        // // foreach (StratifiedCallSite cs in leafNodes){
+                        // //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
+                        // //     leaves.Add(FormLeafNode(cs, callsite2proverName));
+                        // // }
+                        
+                        // // summaries = prover.GetTreeInterpolant(root, leaves);
+                        
+                        // // Console.WriteLine("Computed Summaries:");
+                        // // for (int i=0; i<leaves.Count; i++) {
+                        // //     Console.WriteLine("\t{0} $=$ {1}", leaves[i], prover.VCExpressionToString(summaries[i]));
+                        // // }
+                        
+                        // // for (int i=0; i<leaves.Count; i++) {
+                        // //     System.Diagnostics.Contracts.Contract.Assert(summaries[i] != null);
+
+                        // //     if (summaries[i] == VCExpressionGenerator.True) {
+                        // //         if (!summaryDBDummy.ContainsKey(leafNodes[i].callSite.calleeName)) {
+                        // //             summaryDBDummy.Add(leafNodes[i].callSite.calleeName, summaries[i]);
+                        // //         }
+                        // //     }
+                        // //     else {
+                        // //         string summaryStr = prover.VCExpressionToString(summaries[i]).Replace(leafNodes[i].callSiteExpr.ToString(), "true");
+                        // //         Console.WriteLine("String After replacement:" + summaryStr);
+                        // //         var summaryVC = prover.Simplify(summaryStr);
+
+                        // //         if (summaryDBDummy.ContainsKey(leafNodes[i].callSite.calleeName)) {
+                        // //             summaryDBDummy[leafNodes[i].callSite.calleeName] = prover.VCExprGen.And(summaryDBDummy[leafNodes[i].callSite.calleeName], 
+                        // //                                                                                     summaryVC);
+                        // //         }
+                        // //         else {
+                        // //             summaryDBDummy.Add(leafNodes[i].callSite.calleeName, summaryVC);
+                        // //         }
+                        // //     }
+                        // // }
+
                         List<StratifiedCallSite> leafNodes = lastInlinedCallSites.ToList();
-                        Console.WriteLine("Leaves:");
-                        foreach (StratifiedCallSite cs in leafNodes){
-                            Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                            leaves.Add(FormLeafNode(cs, callsite2proverName));
-                        }
-                        
-                        foreach (StratifiedCallSite cs in leafNodes){
-                            summaries.Add(attachedVC[cs].vcexpr);
-                        }
 
-                        summaries = prover.GetTreeInterpolant(root, leaves);
-                        
-                        Console.WriteLine("Computed Summaries:");
-                        for (int i=0; i<leaves.Count; i++) {
-                            Console.WriteLine("\t{0} $=$ {1}", leaves[i], prover.VCExpressionToString(summaries[i]));
-                        }
-                        
-                        bool AllTrue = true;
-                        for (int i=0; i<leaves.Count; i++) {
-                            Console.WriteLine("i={0}",i);
-                            System.Diagnostics.Contracts.Contract.Assert(summaries[i] != null);
-
-                            if (summaries[i] == VCExpressionGenerator.True) {
-                                if (!summaryDBDummy.ContainsKey(leafNodes[i].callSite.calleeName)) {
-                                    summaryDBDummy.Add(leafNodes[i].callSite.calleeName, summaries[i]);
-                                }
-                            }
-                            else {
-                                AllTrue = false;
-                                string summaryStr = prover.VCExpressionToString(summaries[i]).Replace(leafNodes[i].callSiteExpr.ToString(), "true");
-                                Console.WriteLine("String After replacement:" + summaryStr);
-                                var summaryVC = prover.Simplify(summaryStr);
-                                Console.WriteLine("Simplified VC: {0}", prover.VCExpressionToString(summaryVC));
-                                
-                                if (summaryDBDummy.ContainsKey(leafNodes[i].callSite.calleeName)) {
-                                    summaryDBDummy[leafNodes[i].callSite.calleeName] = prover.VCExprGen.And(summaryDBDummy[leafNodes[i].callSite.calleeName], 
-                                                                                                            summaryVC);
-                                }
-                                else {
-                                    summaryDBDummy.Add(leafNodes[i].callSite.calleeName, summaryVC);
-                                }
-                            }
+                        foreach (var leafNode in leafNodes) {
+                            var parentCallSite = GetPersistentID(parent[leafNode]);
+                            // Console.WriteLine("Parent Callsite for {0} is {1}", GetPersistentID(leafNode), parentCallSite);
+                            var leafNodeVC = prover.VCExprGen.Implies(leafNode.callSiteExpr, attachedVC[leafNode].vcexpr);
+                            summaryDBDummy[GetPersistentID(leafNode)] = leafNodeVC;
                             
+                            //attachedVC.Remove(leafNode);
                         }
-                        System.Diagnostics.Contracts.Contract.Assert(!AllTrue);
 
                         Pop(); // for-overapprox query
+                        prover.LogComment("Running overapprox query - end - Outcome: "+ outcome);
                         Pop(); // for last inlining
-
-                        HashSet<StratifiedCallSite> toRemove = new HashSet<StratifiedCallSite>();
-                        foreach (var cs in lastInlinedCallSites) {
-                            var callName = cs.callSite.calleeName;
-                            if (summaryDBDummy.ContainsKey(callName)) {
-                                toRemove.Add(cs);
-                                prover.LogComment("Asserting summary " +  cs.callSite.calleeName);
-                                var summary = prover.VCExprGen.Implies(cs.callSiteExpr, summaryDBDummy[callName]);
-                                prover.AssertNamed(summary, true, "summ_" + cs.callSiteExpr);
-                                callsite2proverName[cs] = "summ_" + cs.callSiteExpr;
-                            }
-                        }
-                        //openCallSites.ExceptWith(toRemove);
 
                         blockedCallSites.ExceptWith(lastBlockedCallSites);
                         inlinedCallSites.ExceptWith(lastInlinedCallSites);
-                        foreach (var cs in lastInlinedCallSites) {
-                            attachedVC.Remove(cs);
-                        }
+                        
+                        // // foreach (var cs in lastInlinedCallSites) {
+                        // //     attachedVC.Remove(cs);
+                        // // }
+                        // // foreach (var cs in lastBlockedCallSites) {
+                        // //     callsite2proverName.Remove(cs);
+                        // // }
+
+                        // // SiState2 topState = partitionStack.Pop();
+                        // // topState.ApplyState(ref lastInlinedCallSites, ref lastBlockedCallSites, ref nextOpenCallSites);
+                        // // openCallSites.UnionWith(lastBlockedCallSites);
+
+                        // // HashSet<StratifiedCallSite> toRemove = new HashSet<StratifiedCallSite>();
+                        // // foreach (var cs in nextOpenCallSites) {
+                        // //     var callName = cs.callSite.calleeName;
+                        // //     if (summaryDBDummy.ContainsKey(callName)) {
+                        // //         toRemove.Add(cs);
+                        // //         Console.WriteLine("Info: asserting summary for {0}", GetPersistentID(cs));
+                        // //         prover.LogComment("Asserting summary " +  cs.callSite.calleeName);
+                        // //         var summary = prover.VCExprGen.Implies(cs.callSiteExpr, summaryDBDummy[callName]);
+                        // //         prover.AssertNamed(summary, true, "summ_" + cs.callSiteExpr);
+                        // //         callsite2proverName[cs] = "summ_" + cs.callSiteExpr;
+                        // //     }
+                        // // }
+
                         foreach (var cs in lastBlockedCallSites) {
                             callsite2proverName.Remove(cs);
                         }
 
                         SiState2 topState = partitionStack.Pop();
                         topState.ApplyState(ref lastInlinedCallSites, ref lastBlockedCallSites, ref nextOpenCallSites);
-                        openCallSites.UnionWith(lastBlockedCallSites);
+
+                        HashSet<StratifiedCallSite> toRemove = new HashSet<StratifiedCallSite>();
+                        foreach (var cs in leafNodes) {
+                            var callName = GetPersistentID(cs);
+                            if (summaryDBDummy.ContainsKey(callName)) {
+                                toRemove.Add(cs);
+                                Console.WriteLine("Info: asserting summary for {0}", GetPersistentID(cs));
+                                prover.LogComment("Asserting summary for " +  GetPersistentID(cs));
+                                var summary = ComputeSummary(cs);//summaryDBDummy[callName];
+                                prover.AssertNamed(summary, true, "summ_" + cs.callSiteExpr);
+                                callsite2proverName[cs] = "summ_" + cs.callSiteExpr;
+                            }
+                        }
+
                         nextOpenCallSites.ExceptWith(toRemove);
+                        openCallSites.ExceptWith(toRemove);
                         
                     }
                 }
             }
-            
-            // if (outcome == Outcome.Errors) {
-            //     //to generate errorTrace
-            //     while (partitionStack.Count > 0) {
-            //         Pop();
-            //         partitionStack.Pop();
-            //     }
-            //     originalState.ApplyState(this, ref openCallSites);
-            //     return StaticInlining(openCallSites, reporter, inlinedCallSites, recBound);
-            // }
-            
 
+            // while (partitionStack.Count > 0) {
+            //     partitionStack.Pop();
+            //     Pop();
+            // }
+            Console.WriteLine("Trace Inlining - Ended");
+                        
             return outcome;
         }
 
@@ -2224,6 +2285,7 @@ namespace CoreLib
                 {
                     parent[newCallSite] = scs;
                 }
+                childrenOf[scs] = svc.CallSites;
                 VCExpr toassert;
 
                 if (di.disabled)
@@ -2299,7 +2361,10 @@ namespace CoreLib
         }
 
         // Get persistent ID of a callsite
-        private string GetPersistentID(StratifiedCallSite scs)
+
+        // WARNING: TEMPORARILY CONVERTED PRIVATE METHOD TO PUBLIC
+        // REVERT BACK BEFORE DEPLOYMENT
+        public string GetPersistentID(StratifiedCallSite scs)
         {
             if (!parent.ContainsKey(scs))
                 return string.Format("{0}_131_{1}", scs.callSite.calleeName, GetSiCallId(scs));
@@ -4713,7 +4778,8 @@ namespace CoreLib
                 {
                     foreach (StratifiedCallSite scs in svc.callSites[b])
                     {
-                        if (!si.attachedVC.ContainsKey(scs))
+                        if ((!cba.Util.CorralConfig.traceInlining && !si.attachedVC.ContainsKey(scs)) || 
+                            (cba.Util.CorralConfig.traceInlining && !si.attachedVC.ContainsKey(scs) && !si.summaryDBDummy.ContainsKey(si.GetPersistentID(scs))))
                         {
                             if (callSitesToExpand == null)
                                 callSitesToExpand = new List<StratifiedCallSite>();
