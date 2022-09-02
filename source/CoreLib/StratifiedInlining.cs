@@ -1503,36 +1503,36 @@ namespace CoreLib
             partitionStack.Push(SiState2.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites));
             while (true)
             {
-                Console.WriteLine("-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-");
-                Console.WriteLine("All Open Callsites:");
-                foreach (var cs in openCallSites) {
-                    Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                }
-                Console.WriteLine("All Blocked Callsites:");
-                foreach (var cs in blockedCallSites) {
-                    Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                }
-                Console.WriteLine("All Inlined Callsites:");
-                foreach (var cs in inlinedCallSites) {
-                    Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                }
-                Console.WriteLine("Last Inlined Callsites:");
-                foreach (var cs in lastInlinedCallSites) {
-                    Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                }
-                Console.WriteLine("Last Blocked Callsites:");
-                foreach (var cs in lastBlockedCallSites) {
-                    Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                }
-                Console.WriteLine("Next Open Callsites:");
-                foreach (var cs in nextOpenCallSites) {
-                    Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                }
-                Console.WriteLine("Prover State:");
-                foreach (var key in callsite2proverName.Keys) {
-                    Console.WriteLine("{0} -> {1}", GetPersistentID(key), callsite2proverName[key]);
-                }
-                Console.WriteLine("-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-");
+                // Console.WriteLine("-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-");
+                // Console.WriteLine("All Open Callsites:");
+                // foreach (var cs in openCallSites) {
+                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
+                // }
+                // Console.WriteLine("All Blocked Callsites:");
+                // foreach (var cs in blockedCallSites) {
+                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
+                // }
+                // Console.WriteLine("All Inlined Callsites:");
+                // foreach (var cs in inlinedCallSites) {
+                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
+                // }
+                // Console.WriteLine("Last Inlined Callsites:");
+                // foreach (var cs in lastInlinedCallSites) {
+                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
+                // }
+                // Console.WriteLine("Last Blocked Callsites:");
+                // foreach (var cs in lastBlockedCallSites) {
+                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
+                // }
+                // Console.WriteLine("Next Open Callsites:");
+                // foreach (var cs in nextOpenCallSites) {
+                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
+                // }
+                // Console.WriteLine("Prover State:");
+                // foreach (var key in callsite2proverName.Keys) {
+                //     Console.WriteLine("{0} -> {1}", GetPersistentID(key), callsite2proverName[key]);
+                // }
+                // Console.WriteLine("-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-");
 
                 // Check timeout
                 if (CommandLineOptions.Clo.ProverKillTime != -1)
@@ -1707,10 +1707,42 @@ namespace CoreLib
                             leaves.Add(callsite2proverName[cs]);
                         }
 
-                        foreach (var leafNode in leafNodes) {
-                            var leafNodeVC = prover.VCExprGen.Implies(leafNode.callSiteExpr, attachedVC[leafNode].vcexpr);
-                            summaryDBDummy[GetPersistentID(leafNode)] = leafNodeVC;
+                        summaries = prover.GetTreeInterpolant(root, leaves);
+
+                        Console.WriteLine("Computed Summaries:");
+                        for (int i=0; i<leaves.Count; i++) {
+                            Console.WriteLine("\t{0} $=$ {1}", leaves[i], prover.VCExpressionToString(summaries[i]));
                         }
+
+                        for (int i=0; i<leaves.Count; i++) {
+                            System.Diagnostics.Contracts.Contract.Assert(summaries[i] != null);
+
+                            var key = GetPersistentID(leafNodes[i]);
+
+                            if (summaries[i] == VCExpressionGenerator.True) {
+                                if (!summaryDBDummy.ContainsKey(key)) {
+                                    summaryDBDummy.Add(key, summaries[i]);
+                                }
+                            }
+                            else {
+                                // string summaryStr = prover.VCExpressionToString(summaries[i]).Replace(leafNodes[i].callSiteExpr.ToString(), "true");
+                                // Console.WriteLine("String After replacement:" + summaryStr);
+                                // var summaryVC = prover.Simplify(summaryStr);
+                                var summaryVC = summaries[i];
+
+                                if (summaryDBDummy.ContainsKey(key)) {
+                                    summaryDBDummy[key] = prover.VCExprGen.And(summaryDBDummy[key], summaryVC);
+                                }
+                                else {
+                                    summaryDBDummy.Add(key, summaryVC);
+                                }
+                            }
+                        }
+
+                        // foreach (var leafNode in leafNodes) {
+                        //     var leafNodeVC = prover.VCExprGen.Implies(leafNode.callSiteExpr, attachedVC[leafNode].vcexpr);
+                        //     summaryDBDummy[GetPersistentID(leafNode)] = leafNodeVC;
+                        // }
 
                         Pop(); // for-overapprox query
                         prover.LogComment("Running overapprox query - end - Outcome: "+ outcome);
