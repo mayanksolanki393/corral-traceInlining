@@ -181,8 +181,6 @@ namespace CoreLib
         /*  Parent linking -- used only for computing the recursion depth */
         public Dictionary<StratifiedCallSite, StratifiedCallSite> parent;
 
-        public Dictionary<StratifiedCallSite, VCExpr> dummyVars;
-
         // Set of implementations
         HashSet<string> implementations;
 
@@ -278,7 +276,6 @@ namespace CoreLib
             summaryCache = new Dictionary<StratifiedCallSite, StratifiedVC>();
             attachedVCInv = new Dictionary<StratifiedVC, StratifiedCallSite>();
             parent = new Dictionary<StratifiedCallSite, StratifiedCallSite>();
-            dummyVars = new Dictionary<StratifiedCallSite, VCExpr>();
             implementations = new HashSet<string>(implName2StratifiedInliningInfo.Keys);
 
             forceInlineProcs = new HashSet<string>();
@@ -1464,14 +1461,12 @@ namespace CoreLib
             private Dictionary<String, List<VCExprVar>> methodName2AbsInterfaceVars;
             private ProverInterface prover;
             private int abstractVarCounter;
-            private StratifiedInlining si;
             
-            public SummaryManager(ProverInterface prover, StratifiedInlining si) {
+            public SummaryManager(ProverInterface prover) {
                 this.summaries = new Dictionary<String, VCExpr>();
                 this.prover = prover;
                 this.abstractVarCounter = 0;
                 this.methodName2AbsInterfaceVars = new Dictionary<String, List<VCExprVar>>();
-                this.si = si;
             }
 
             public Boolean Contains(StratifiedCallSite cs) {
@@ -1479,8 +1474,8 @@ namespace CoreLib
                 return this.summaries.ContainsKey(cs.callSite.calleeName);
             }
 
-            private VCExpr GetSummary(StratifiedCallSite cs) {
-                return this.summaries[cs.callSite.calleeName];
+            public VCExpr GetSummary(StratifiedCallSite cs) {
+                return this.GetConcreteSummary(cs);
             }
 
             private VCExprVar CreateNewAbstractVariable(Microsoft.Boogie.Type varType) {
@@ -1494,6 +1489,7 @@ namespace CoreLib
                 
                 List<VCExprVar> absInterfaceVars;
 
+                //Form new variables for abstracting summaries
                 if (!methodName2AbsInterfaceVars.ContainsKey(methodName)) {
                     absInterfaceVars = new List<VCExprVar>();
                     foreach(var formalVar in vc.interfaceExprVars) {
@@ -1505,12 +1501,12 @@ namespace CoreLib
                     absInterfaceVars = methodName2AbsInterfaceVars[methodName];
                 }
                 
-
+                //Replace actual arguments with formal arguments
                 Dictionary<VCExprVar, VCExpr> substMapping = new Dictionary<VCExprVar, VCExpr>();
                 substMapping.Add(scs.callSiteExpr as VCExprVar, VCExpressionGenerator.True);
-                Console.WriteLine("Abstracting: ");
+                //Console.WriteLine("Abstracting: ");
                 for (int i=0; i<vc.interfaceExprVars.Count; i++) {
-                    Console.WriteLine("\t{0} => {1}", vc.interfaceExprVars[i], absInterfaceVars[i]);
+                    //Console.WriteLine("\t{0} => {1}", vc.interfaceExprVars[i], absInterfaceVars[i]);
                     substMapping.Add(vc.interfaceExprVars[i], absInterfaceVars[i]);
                 }
 
@@ -1518,7 +1514,7 @@ namespace CoreLib
                 SubstitutingVCExprVisitor substVisitor = new SubstitutingVCExprVisitor(prover.VCExprGen);
                 var abstractedSummary = substVisitor.Mutate(summary, subst);
 
-                Console.WriteLine("*Conc: {0}\nAbst: {1}", prover.VCExpressionToString(summary), prover.VCExpressionToString(abstractedSummary));
+                //Console.WriteLine("*Conc: {0}\nAbst: {1}", prover.VCExpressionToString(summary), prover.VCExpressionToString(abstractedSummary));
 
                 return abstractedSummary;
             }
@@ -1542,45 +1538,42 @@ namespace CoreLib
                 String methodName = scs.callSite.calleeName;
 
                 List<VCExprVar> absInterfaceVars = methodName2AbsInterfaceVars[methodName];
-                VCExpr abstractedSummary = GetSummary(scs);
+                VCExpr abstractedSummary = this.summaries[methodName];
 
                 Dictionary<VCExprVar, VCExpr> substMapping = new Dictionary<VCExprVar, VCExpr>();
                 
-                Console.WriteLine("Concretizing: ");
+                //Console.WriteLine("Concretizing: ");
                 for (int i=0; i<scs.interfaceExprs.Count; i++) {
-                    Console.WriteLine("\t{0} => {1}", absInterfaceVars[i], scs.interfaceExprs[i]);
+                    //Console.WriteLine("\t{0} => {1}", absInterfaceVars[i], scs.interfaceExprs[i]);
                     substMapping.Add(absInterfaceVars[i], scs.interfaceExprs[i]);
                 }
 
                 VCExprSubstitution subst = new VCExprSubstitution(substMapping, new Dictionary<TypeVariable, Microsoft.Boogie.Type>());
                 SubstitutingVCExprVisitor substVisitor = new SubstitutingVCExprVisitor(prover.VCExprGen);
                 var concretizedSummary = prover.VCExprGen.Implies(scs.callSiteExpr, substVisitor.Mutate(abstractedSummary, subst));
-                Console.WriteLine("Abs: {0}\nConc: {1}",prover.VCExpressionToString(abstractedSummary), prover.VCExpressionToString(concretizedSummary));
+                //Console.WriteLine("Abs: {0}\nConc: {1}", prover.VCExpressionToString(abstractedSummary), prover.VCExpressionToString(concretizedSummary));
                 return concretizedSummary;
-            }
-
-            public VCExpr ComputeSummary(StratifiedCallSite callsite, int recBound, Dictionary<StratifiedCallSite, List<StratifiedCallSite>> childrenOf) {
-                VCExpr summary = GetConcreteSummary(callsite);
-
-                if (childrenOf.ContainsKey(callsite)) {
-                    foreach (var childCallSite in childrenOf[callsite]) {
-                        if (si.HasExceededRecursionDepth(childCallSite, recBound)) {
-                            var blockControlVar = prover.VCExprGen.Not(childCallSite.callSiteExpr);
-                            summary = prover.VCExprGen.And(summary, blockControlVar);
-                        }
-                        else if (Contains(childCallSite)) {
-                            summary = prover.VCExprGen.And(summary, ComputeSummary(childCallSite, recBound, childrenOf));
-                        }
-                    }
-                }
-                    
-                return summary;
             }
         }
 
-        
+        public String FormChildNode(StratifiedCallSite scs, int recBound) {
+            List<String> nodes = new List<string>();
 
-        public Dictionary<StratifiedCallSite, List<StratifiedCallSite>> childrenOf = new Dictionary<StratifiedCallSite, List<StratifiedCallSite>>();
+            nodes.Add("inlined_" + scs.callSiteExpr);
+
+            foreach (var child in attachedVC[scs].CallSites) {
+                if (HasExceededRecursionDepth(child, recBound)) {
+                    nodes.Add("blocked_" + child.callSiteExpr);
+                }
+                else {
+                    nodes.Add("summ_" + child.callSiteExpr);
+                }
+            }
+
+            return "(and " + String.Join(" ", nodes) + ")";
+        }
+
+        //public Dictionary<StratifiedCallSite, List<StratifiedCallSite>> childrenOf = new Dictionary<StratifiedCallSite, List<StratifiedCallSite>>();
         public Outcome TraceInlining(HashSet<StratifiedCallSite> openCallSites, StratifiedInliningErrorReporter reporter, bool main, int recBound)
         {
             Console.WriteLine("Trace Inlining - Start");
@@ -1598,8 +1591,8 @@ namespace CoreLib
             HashSet<StratifiedCallSite> nextOpenCallSites = new HashSet<StratifiedCallSite>(openCallSites);
 
             Dictionary<StratifiedCallSite, string> callsite2proverName = new Dictionary<StratifiedCallSite, string>();
-            SummaryManager summManager = new SummaryManager(prover, this);
-            childrenOf = new Dictionary<StratifiedCallSite, List<StratifiedCallSite>>();
+            SummaryManager summManager = new SummaryManager(prover);
+            //childrenOf = new Dictionary<StratifiedCallSite, List<StratifiedCallSite>>();
             
             var boundHit = false;
 
@@ -1688,13 +1681,14 @@ namespace CoreLib
                     {
                         // Console.WriteLine("Info: Blocking: RecurBoundReached: {0}", GetPersistentID(cs));
                         prover.LogComment("Blocking: RecurBoundReached: "+ GetPersistentID(cs));
-                        prover.Assert(cs.callSiteExpr, false);
+                        prover.AssertNamed(cs.callSiteExpr, false, "blocked_" + cs.callSiteExpr);
                         procsHitRecBound.Add(cs.callSite.calleeName);
                         //Console.WriteLine("Proc {0} hit rec bound of {1}", cs.callSite.calleeName, recBound);
                         boundHit = true;
                     }
                     else if (summManager.Contains(cs)) {
-                        var summary = summManager.ComputeSummary(cs, recBound, childrenOf);
+                        //var summary = summManager.ComputeSummary(cs, recBound, childrenOf);
+                        var summary = summManager.GetSummary(cs);
                         prover.LogComment("Asserting summary for " + GetPersistentID(cs));
                         prover.AssertNamed(summary, true, "summ_" + cs.callSiteExpr);
                     }
@@ -1714,7 +1708,7 @@ namespace CoreLib
                     Console.WriteLine("Running overapprox query - end - Outcome: "+ outcome);
                     prover.LogComment("Running overapprox query - end - Outcome: "+ outcome);
 
-                    Console.WriteLine("callSitesToExpand.Count=" + reporter.callSitesToExpand.Count);
+                    //Console.WriteLine("callSitesToExpand.Count=" + reporter.callSitesToExpand.Count);
                     
                     if (reporter.callSitesToExpand.Count == 0) {
                         outcome = Outcome.Inconclusive;
@@ -1748,17 +1742,19 @@ namespace CoreLib
                         if (toExpand.Contains(scs))
                         {
                             Console.WriteLine("Info: Inlining: {0} - {1}", scs.callSiteExpr, GetPersistentID(scs));
-                            
-                            //var svc = Expand(scs, "inlined_" + scs.callSiteExpr.ToString(), false, false);
+                        
                             var svc = TraceExpand(scs, "inlined_" + scs.callSiteExpr.ToString());
-                            var info = implName2StratifiedInliningInfo[scs.callSite.calleeName];
-                            System.Diagnostics.Contracts.Contract.Assert(info.interfaceExprVars.Count == svc.interfaceExprVars.Count);
-                            System.Diagnostics.Contracts.Contract.Assert(scs.interfaceExprs.Count == svc.interfaceExprVars.Count);
-                            Console.WriteLine("interface mapping: ");
-                            Console.WriteLine("program <-> formal <-> actual");
-                            for (int i=0; i<info.interfaceExprVars.Count; i++ ) {
-                                Console.WriteLine("\t- {0} <-> {1} <-> {2}", info.interfaceExprVars[i], svc.interfaceExprVars[i], scs.interfaceExprs[i]);
-                            }
+                            //var svc = Expand(scs, "inlined_" + scs.callSiteExpr.ToString(), false, false);
+                            
+                            // var info = implName2StratifiedInliningInfo[scs.callSite.calleeName];
+                            // System.Diagnostics.Contracts.Contract.Assert(info.interfaceExprVars.Count == svc.interfaceExprVars.Count);
+                            // System.Diagnostics.Contracts.Contract.Assert(scs.interfaceExprs.Count == svc.interfaceExprVars.Count);
+                            // prover.LogComment("interface mapping: ");
+                            // prover.LogComment("\tprogram <-> formal <-> actual");
+                            // for (int i=0; i<info.interfaceExprVars.Count; i++ ) {
+                            //     prover.LogComment("\t- " + info.interfaceExprVars[i] + " <-> " + svc.interfaceExprVars[i]+" <-> " + scs.interfaceExprs[i]);
+                            // }
+
                             if (svc != null)
                             {
                                 openCallSites.Remove(scs);
@@ -1809,7 +1805,7 @@ namespace CoreLib
 
                         List<string> root = rootNodes.Select(cs => callsite2proverName[cs]).ToList();
                         List<string> eqVC = inlinedCallSites.Select(cs => "eq_" + callsite2proverName[cs]).ToList();
-                        List<string> leaves = leafNodes.Select(cs => callsite2proverName[cs]).ToList();
+                        List<string> leaves = leafNodes.Select(cs => FormChildNode(cs, recBound)).ToList();
 
                         root.AddRange(eqVC);
 
@@ -2337,7 +2333,7 @@ namespace CoreLib
                 {
                     parent[newCallSite] = scs;
                 }
-                childrenOf[scs] = svc.CallSites;
+                //childrenOf[scs] = svc.CallSites;
                 VCExpr toassert;
 
                 if (di.disabled)
@@ -2393,7 +2389,7 @@ namespace CoreLib
                 parent[newCallSite] = scs;
             }
             //Need to do this, cause we remove entries from attachedVC while backtracking
-            childrenOf[scs] = svc.CallSites;
+            //childrenOf[scs] = svc.CallSites;
 
             //Forming parts of VC
             VCExpr toassert = prover.VCExprGen.Implies(scs.callSiteExpr, svc.vcexpr);
@@ -2450,10 +2446,7 @@ namespace CoreLib
         }
 
         // Get persistent ID of a callsite
-
-        // WARNING: TEMPORARILY CONVERTED PRIVATE METHOD TO PUBLIC
-        // REVERT BACK BEFORE DEPLOYMENT
-        public string GetPersistentID(StratifiedCallSite scs)
+        private string GetPersistentID(StratifiedCallSite scs)
         {
             if (!parent.ContainsKey(scs))
                 return string.Format("{0}_131_{1}", scs.callSite.calleeName, GetSiCallId(scs));
