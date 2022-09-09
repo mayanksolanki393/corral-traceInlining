@@ -1556,17 +1556,19 @@ namespace CoreLib
             }
         }
 
-        public String FormChildNode(StratifiedCallSite scs, int recBound) {
+        public String FormChildNode(StratifiedCallSite scs, SummaryManager summManager, int recBound) {
             List<String> nodes = new List<string>();
 
             nodes.Add("inlined_" + scs.callSiteExpr);
 
-            foreach (var child in attachedVC[scs].CallSites) {
-                if (HasExceededRecursionDepth(child, recBound)) {
-                    nodes.Add("blocked_" + child.callSiteExpr);
+            foreach (var childCS in attachedVC[scs].CallSites) {
+                if (HasExceededRecursionDepth(childCS, recBound)) {
+                    nodes.Add("blocked_" + childCS.callSiteExpr);
                 }
                 else {
-                    nodes.Add("summ_" + child.callSiteExpr);
+                    if (summManager.Contains(childCS)) {
+                        nodes.Add("summ_" + childCS.callSiteExpr);
+                    }
                 }
             }
 
@@ -1805,7 +1807,7 @@ namespace CoreLib
 
                         List<string> root = rootNodes.Select(cs => callsite2proverName[cs]).ToList();
                         List<string> eqVC = inlinedCallSites.Select(cs => "eq_" + callsite2proverName[cs]).ToList();
-                        List<string> leaves = leafNodes.Select(cs => FormChildNode(cs, recBound)).ToList();
+                        List<string> leaves = leafNodes.Select(cs => FormChildNode(cs, summManager, recBound)).ToList();
 
                         root.AddRange(eqVC);
 
