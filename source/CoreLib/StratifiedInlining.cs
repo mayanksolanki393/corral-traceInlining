@@ -1599,6 +1599,7 @@ namespace CoreLib
             var boundHit = false;
 
             Push();
+            Push();
             partitionStack.Push(SiState2.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites));
             while (true)
             {
@@ -1688,12 +1689,6 @@ namespace CoreLib
                         //Console.WriteLine("Proc {0} hit rec bound of {1}", cs.callSite.calleeName, recBound);
                         boundHit = true;
                     }
-                    else if (summManager.Contains(cs)) {
-                        //var summary = summManager.ComputeSummary(cs, recBound, childrenOf);
-                        var summary = summManager.GetSummary(cs);
-                        prover.LogComment("Asserting summary for " + GetPersistentID(cs));
-                        prover.AssertNamed(summary, true, "summ_" + cs.callSiteExpr);
-                    }
                 }
 
                 reporter.reportTrace = false;
@@ -1710,8 +1705,6 @@ namespace CoreLib
                     Console.WriteLine("Running overapprox query - end - Outcome: "+ outcome);
                     prover.LogComment("Running overapprox query - end - Outcome: "+ outcome);
 
-                    //Console.WriteLine("callSitesToExpand.Count=" + reporter.callSitesToExpand.Count);
-                    
                     if (reporter.callSitesToExpand.Count == 0) {
                         outcome = Outcome.Inconclusive;
                         break;
@@ -1719,7 +1712,8 @@ namespace CoreLib
 
                     //save current solver state and partition state
                     partitionStack.Push(SiState2.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites));
-                    Push(); // For next level of inlining
+                    prover.LogComment("push - newframe for next inlining");
+                    Push(); // push-newframe for next inlining
 
                     var toExpand = reporter.callSitesToExpand;
                     if (BoogieVerify.options.extraFlags.Contains("SiStingy"))
@@ -1730,14 +1724,9 @@ namespace CoreLib
 
                     System.Diagnostics.Contracts.Contract.Assert(toExpand.Count > 0);
 
-                    // Console.WriteLine("Callsites in toExpand:");
-                    // foreach (var cs in toExpand) {
-                    //     Console.WriteLine("\t - {0}", GetPersistentID(cs));
-                    // }
-
                     lastInlinedCallSites.Clear();
                     lastBlockedCallSites.Clear();
-                    HashSet<StratifiedCallSite> nextnextOpenCallsites = new HashSet<StratifiedCallSite>();
+                    nextOpenCallSites.Clear();
                     foreach (StratifiedCallSite scs in openCallSites)
                     {
                         //Inline Callsite
@@ -1746,22 +1735,11 @@ namespace CoreLib
                             Console.WriteLine("Info: Inlining: {0} - {1}", scs.callSiteExpr, GetPersistentID(scs));
                         
                             var svc = TraceExpand(scs, "inlined_" + scs.callSiteExpr.ToString());
-                            //var svc = Expand(scs, "inlined_" + scs.callSiteExpr.ToString(), false, false);
-                            
-                            // var info = implName2StratifiedInliningInfo[scs.callSite.calleeName];
-                            // System.Diagnostics.Contracts.Contract.Assert(info.interfaceExprVars.Count == svc.interfaceExprVars.Count);
-                            // System.Diagnostics.Contracts.Contract.Assert(scs.interfaceExprs.Count == svc.interfaceExprVars.Count);
-                            // prover.LogComment("interface mapping: ");
-                            // prover.LogComment("\tprogram <-> formal <-> actual");
-                            // for (int i=0; i<info.interfaceExprVars.Count; i++ ) {
-                            //     prover.LogComment("\t- " + info.interfaceExprVars[i] + " <-> " + svc.interfaceExprVars[i]+" <-> " + scs.interfaceExprs[i]);
-                            // }
 
                             if (svc != null)
                             {
-                                openCallSites.Remove(scs);
                                 lastInlinedCallSites.Add(scs);
-                                nextnextOpenCallsites.UnionWith(svc.CallSites);
+                                nextOpenCallSites.UnionWith(svc.CallSites);
 
                                 callsite2proverName[scs] = "inlined_" + scs.callSiteExpr.ToString();
 
@@ -1778,7 +1756,18 @@ namespace CoreLib
                         }
                     }
 
-                    nextOpenCallSites = nextnextOpenCallsites;
+                    prover.LogComment("push - newframe for summary");
+                    Push(); //new frame for summary
+
+                    foreach (var scs in nextOpenCallSites) {
+                        if (summManager.Contains(scs)) {
+                            var summary = summManager.GetSummary(scs);
+                            prover.LogComment("Asserting summary for " + GetPersistentID(scs));
+                            prover.AssertNamed(summary, true, "summ_" + scs.callSiteExpr);
+                        }
+                    }
+
+                    openCallSites.ExceptWith(lastInlinedCallSites);
                     openCallSites.ExceptWith(lastBlockedCallSites);
                     openCallSites.UnionWith(nextOpenCallSites);
                     inlinedCallSites.UnionWith(lastInlinedCallSites);
@@ -1823,12 +1812,12 @@ namespace CoreLib
                         Pop(); // for-overapprox query
                         prover.LogComment("Running overapprox query - end - Outcome: "+ outcome);
                         
-                        openCallSites.ExceptWith(nextOpenCallSites);
                         openCallSites.UnionWith(lastInlinedCallSites);
                         openCallSites.UnionWith(lastBlockedCallSites);
+                        openCallSites.ExceptWith(nextOpenCallSites);
                         blockedCallSites.ExceptWith(lastBlockedCallSites);
                         inlinedCallSites.ExceptWith(lastInlinedCallSites);
-                        
+
                         foreach (var cs in lastBlockedCallSites) {
                             callsite2proverName.Remove(cs);
                         }
@@ -1837,9 +1826,25 @@ namespace CoreLib
                             attachedVC.Remove(cs);
                         }
 
-                        Pop(); // for last inlining
                         SiState2 topState = partitionStack.Pop();
                         topState.ApplyState(ref lastInlinedCallSites, ref lastBlockedCallSites, ref nextOpenCallSites);
+
+                        prover.LogComment("pop - last summary frame");
+                        Pop(); //pop-last summary frame
+                        prover.LogComment("pop - last inlining frame");
+                        Pop(); //pop-last inlining
+                        prover.LogComment("pop - second-last summary frame");
+                        Pop(); //pop-second last summary frame
+                        prover.LogComment("push - new second-last summary frame");
+                        Push(); //push-new second last summary frame
+
+                        foreach (var scs in nextOpenCallSites) {
+                            if (summManager.Contains(scs)) {
+                                var summary = summManager.GetSummary(scs);
+                                prover.LogComment("Asserting summary for " + GetPersistentID(scs));
+                                prover.AssertNamed(summary, true, "summ_" + scs.callSiteExpr);
+                            }
+                        }
                     }
                 }
                 else {
@@ -1850,8 +1855,10 @@ namespace CoreLib
             while (partitionStack.Count > 0) {
                 prover.LogComment("pstack-pop");
                 partitionStack.Pop();
-                Pop();
+                Pop(); //for summary-frame
+                Pop(); //for inlining-frame
             }
+
             prover.LogComment("Trace Inlining - Ended");
             Console.WriteLine("Trace Inlining - Ended");
                  
