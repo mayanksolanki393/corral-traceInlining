@@ -426,26 +426,31 @@ namespace CoreLib
 
             public HashSet<StratifiedCallSite> lastInlinedCallSites;
             public HashSet<StratifiedCallSite> lastBlockedCallSites;
-            public HashSet<StratifiedCallSite> lastOpenCallSites;
+            public HashSet<StratifiedCallSite> nextOpenCallSites;
+            public HashSet<StratifiedCallSite> nextSummarizedCallSites;
 
             public static SiState2 SaveState(HashSet<StratifiedCallSite> lastInlinedCallSites,
-                HashSet<StratifiedCallSite> lastBlockedCallSites, HashSet<StratifiedCallSite> lastOpenCallSites)
+                HashSet<StratifiedCallSite> lastBlockedCallSites, HashSet<StratifiedCallSite> nextOpenCallSites,
+                HashSet<StratifiedCallSite> nextSummarizedCallSites)
             {
                 var ret = new SiState2();
 
                 ret.lastInlinedCallSites = new HashSet<StratifiedCallSite>(lastInlinedCallSites);
                 ret.lastBlockedCallSites = new HashSet<StratifiedCallSite>(lastBlockedCallSites);
-                ret.lastOpenCallSites = new HashSet<StratifiedCallSite>(lastOpenCallSites);
+                ret.nextOpenCallSites = new HashSet<StratifiedCallSite>(nextOpenCallSites);
+                ret.nextSummarizedCallSites = new HashSet<StratifiedCallSite>(nextSummarizedCallSites);
 
                 return ret;
             }
 
             public void ApplyState(ref HashSet<StratifiedCallSite> lastInlinedCallSites,
-                ref HashSet<StratifiedCallSite> lastBlockedCallSites, ref HashSet<StratifiedCallSite> lastOpenCallSites)
+                ref HashSet<StratifiedCallSite> lastBlockedCallSites, ref HashSet<StratifiedCallSite> nextOpenCallSites,
+                ref HashSet<StratifiedCallSite> nextSummarizedCallSites)
             {
                 lastInlinedCallSites = this.lastInlinedCallSites;
                 lastBlockedCallSites = this.lastBlockedCallSites;
-                lastOpenCallSites = this.lastOpenCallSites;
+                nextOpenCallSites = this.nextOpenCallSites;
+                nextSummarizedCallSites = this.nextSummarizedCallSites;
             }
         }
 
@@ -1591,6 +1596,7 @@ namespace CoreLib
             HashSet<StratifiedCallSite> lastInlinedCallSites = new HashSet<StratifiedCallSite>();
             HashSet<StratifiedCallSite> lastBlockedCallSites = new HashSet<StratifiedCallSite>();
             HashSet<StratifiedCallSite> nextOpenCallSites = new HashSet<StratifiedCallSite>(openCallSites);
+            HashSet<StratifiedCallSite> nextSummCallSites = new HashSet<StratifiedCallSite>();
 
             Dictionary<StratifiedCallSite, string> callsite2proverName = new Dictionary<StratifiedCallSite, string>();
             SummaryManager summManager = new SummaryManager(prover);
@@ -1598,9 +1604,9 @@ namespace CoreLib
             
             var boundHit = false;
 
-            Push();
-            Push();
-            partitionStack.Push(SiState2.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites));
+            Push(); //inlining of sudo-main
+            Push(); //summaries of sudo-main
+            partitionStack.Push(SiState2.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites, nextSummCallSites));
             while (true)
             {
                 // Console.WriteLine("-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-");
@@ -1711,7 +1717,7 @@ namespace CoreLib
                     }
 
                     //save current solver state and partition state
-                    partitionStack.Push(SiState2.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites));
+                    partitionStack.Push(SiState2.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites, nextSummCallSites));
                     prover.LogComment("push - newframe for next inlining");
                     Push(); // push-newframe for next inlining
 
@@ -1727,6 +1733,7 @@ namespace CoreLib
                     lastInlinedCallSites.Clear();
                     lastBlockedCallSites.Clear();
                     nextOpenCallSites.Clear();
+                    nextSummCallSites.Clear();
                     foreach (StratifiedCallSite scs in openCallSites)
                     {
                         //Inline Callsite
@@ -1761,6 +1768,7 @@ namespace CoreLib
 
                     foreach (var scs in nextOpenCallSites) {
                         if (summManager.Contains(scs)) {
+                            nextSummCallSites.Add(scs);
                             var summary = summManager.GetSummary(scs);
                             prover.LogComment("Asserting summary for " + GetPersistentID(scs));
                             prover.AssertNamed(summary, true, "summ_" + scs.callSiteExpr);
@@ -1769,16 +1777,17 @@ namespace CoreLib
 
                     openCallSites.ExceptWith(lastInlinedCallSites);
                     openCallSites.ExceptWith(lastBlockedCallSites);
+                    System.Diagnostics.Contracts.Contract.Assert(openCallSites.Count == 0);
                     openCallSites.UnionWith(nextOpenCallSites);
                     inlinedCallSites.UnionWith(lastInlinedCallSites);
                     blockedCallSites.UnionWith(lastBlockedCallSites);
                 }
                 else if (outcome == Outcome.Correct)
                 {
-                    if (partitionStack.Count <= 1)
+                    System.Diagnostics.Contracts.Contract.Assert(partitionStack.Count > 0);
+                    if (partitionStack.Count == 1)
                     {
-                        if (boundHit && outcome == Outcome.Correct)
-                            outcome = Outcome.ReachedBound;
+                        if (boundHit) outcome = Outcome.ReachedBound;
 
                         Pop(); // pop the overapprox part
                         break; // done
@@ -1799,6 +1808,10 @@ namespace CoreLib
                         List<string> leaves = leafNodes.Select(cs => FormChildNode(cs, summManager, recBound)).ToList();
 
                         root.AddRange(eqVC);
+
+                        var lastSummarizedCallSites = partitionStack.Peek().nextSummarizedCallSites;
+                        List<string> summaried = inlinedCallSites.Where(cs => lastSummarizedCallSites.Contains(cs)).Select(cs => "summ_" + cs.callSiteExpr).ToList();
+                        root.AddRange(summaried);
 
                         //ComputeSummaries
                         List<VCExpr> summaries = prover.GetTreeInterpolant(root, leaves);
@@ -1827,7 +1840,7 @@ namespace CoreLib
                         }
 
                         SiState2 topState = partitionStack.Pop();
-                        topState.ApplyState(ref lastInlinedCallSites, ref lastBlockedCallSites, ref nextOpenCallSites);
+                        topState.ApplyState(ref lastInlinedCallSites, ref lastBlockedCallSites, ref nextOpenCallSites, ref nextSummCallSites);
 
                         prover.LogComment("pop - last summary frame");
                         Pop(); //pop-last summary frame
@@ -1838,8 +1851,10 @@ namespace CoreLib
                         prover.LogComment("push - new second-last summary frame");
                         Push(); //push-new second last summary frame
 
+                        nextSummCallSites.Clear();
                         foreach (var scs in nextOpenCallSites) {
                             if (summManager.Contains(scs)) {
+                                nextSummCallSites.Add(scs);
                                 var summary = summManager.GetSummary(scs);
                                 prover.LogComment("Asserting summary for " + GetPersistentID(scs));
                                 prover.AssertNamed(summary, true, "summ_" + scs.callSiteExpr);
