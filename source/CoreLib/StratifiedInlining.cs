@@ -421,7 +421,7 @@ namespace CoreLib
             }
         }
 
-        struct SiState2
+        struct TiState
         {
 
             public HashSet<StratifiedCallSite> lastInlinedCallSites;
@@ -429,11 +429,11 @@ namespace CoreLib
             public HashSet<StratifiedCallSite> nextOpenCallSites;
             public HashSet<StratifiedCallSite> nextSummarizedCallSites;
 
-            public static SiState2 SaveState(HashSet<StratifiedCallSite> lastInlinedCallSites,
+            public static TiState SaveState(HashSet<StratifiedCallSite> lastInlinedCallSites,
                 HashSet<StratifiedCallSite> lastBlockedCallSites, HashSet<StratifiedCallSite> nextOpenCallSites,
                 HashSet<StratifiedCallSite> nextSummarizedCallSites)
             {
-                var ret = new SiState2();
+                var ret = new TiState();
 
                 ret.lastInlinedCallSites = new HashSet<StratifiedCallSite>(lastInlinedCallSites);
                 ret.lastBlockedCallSites = new HashSet<StratifiedCallSite>(lastBlockedCallSites);
@@ -1588,7 +1588,7 @@ namespace CoreLib
             Outcome outcome = Outcome.Inconclusive;
             DateTime qStartTime;
             
-            Stack<SiState2> partitionStack = new Stack<SiState2>();
+            Stack<TiState> partitionStack = new Stack<TiState>();
             
             HashSet<StratifiedCallSite> blockedCallSites = new HashSet<StratifiedCallSite>();
             HashSet<StratifiedCallSite> inlinedCallSites = new HashSet<StratifiedCallSite>();
@@ -1606,7 +1606,7 @@ namespace CoreLib
 
             Push(); //inlining of sudo-main
             Push(); //summaries of sudo-main
-            partitionStack.Push(SiState2.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites, nextSummCallSites));
+            partitionStack.Push(TiState.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites, nextSummCallSites));
             while (true)
             {
                 // Console.WriteLine("-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-");
@@ -1717,7 +1717,7 @@ namespace CoreLib
                     }
 
                     //save current solver state and partition state
-                    partitionStack.Push(SiState2.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites, nextSummCallSites));
+                    partitionStack.Push(TiState.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites, nextSummCallSites));
                     prover.LogComment("push - newframe for next inlining");
                     Push(); // push-newframe for next inlining
 
@@ -1839,7 +1839,7 @@ namespace CoreLib
                             attachedVC.Remove(cs);
                         }
 
-                        SiState2 topState = partitionStack.Pop();
+                        TiState topState = partitionStack.Pop();
                         topState.ApplyState(ref lastInlinedCallSites, ref lastBlockedCallSites, ref nextOpenCallSites, ref nextSummCallSites);
 
                         prover.LogComment("pop - last summary frame");
