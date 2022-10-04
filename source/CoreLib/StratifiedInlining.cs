@@ -1591,15 +1591,15 @@ namespace CoreLib
         public String FormChildNode(StratifiedCallSite scs, SummaryManager summManager, int recBound) {
             List<String> nodes = new List<string>();
 
-            nodes.Add("inlined_" + scs.callSiteExpr);
+            nodes.Add("assert_" + scs.callSiteExpr);
 
             foreach (var childCS in attachedVC[scs].CallSites) {
                 if (HasExceededRecursionDepth(childCS, recBound)) {
-                    nodes.Add("blocked_" + childCS.callSiteExpr);
+                    nodes.Add("assert_" + childCS.callSiteExpr);
                 }
                 else {
                     if (summManager.Contains(childCS)) {
-                        nodes.Add("summ_" + childCS.callSiteExpr);
+                        nodes.Add("summary_" + childCS.callSiteExpr);
                     }
                 }
             }
@@ -1624,7 +1624,6 @@ namespace CoreLib
             HashSet<StratifiedCallSite> nextOpenCallSites = new HashSet<StratifiedCallSite>(openCallSites);
             HashSet<StratifiedCallSite> nextSummCallSites = new HashSet<StratifiedCallSite>();
 
-            Dictionary<StratifiedCallSite, string> callsite2proverName = new Dictionary<StratifiedCallSite, string>();
             SummaryManager summManager = new SummaryManager(prover);
             
             var boundHit = false;
@@ -1634,7 +1633,6 @@ namespace CoreLib
             partitionStack.Push(TiState.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites, nextSummCallSites));
             while (true)
             {
-
                 // Check timeout
                 if (CommandLineOptions.Clo.ProverKillTime != -1)
                 {
@@ -1685,7 +1683,7 @@ namespace CoreLib
                     {
                         // Console.WriteLine("Info: Blocking: RecurBoundReached: {0}", GetPersistentID(cs));
                         prover.LogComment("Blocking: RecurBoundReached: "+ GetPersistentID(cs));
-                        prover.AssertNamed(cs.callSiteExpr, false, "blocked_" + cs.callSiteExpr);
+                        prover.AssertNamed(cs.callSiteExpr, false, "assert_" + cs.callSiteExpr);
                         procsHitRecBound.Add(cs.callSite.calleeName);
                         //Console.WriteLine("Proc {0} hit rec bound of {1}", cs.callSite.calleeName, recBound);
                         boundHit = true;
@@ -1733,27 +1731,15 @@ namespace CoreLib
                         //Inline Callsite
                         if (toExpand.Contains(scs))
                         {
-                            Console.WriteLine("Info: Inlining: {0} - {1}", scs.callSiteExpr, GetPersistentID(scs));
-                        
-                            var svc = TraceExpand(scs, "inlined_" + scs.callSiteExpr.ToString());
-
-                            if (svc != null)
-                            {
-                                lastInlinedCallSites.Add(scs);
-                                nextOpenCallSites.UnionWith(svc.CallSites);
-
-                                callsite2proverName[scs] = "inlined_" + scs.callSiteExpr.ToString();
-
-                                if (cba.Util.BoogieVerify.options.useFwdBck) MustNotFail(scs, svc);
-                            }
+                            var svc = TraceExpand(scs, "assert_" + scs.callSiteExpr.ToString());
+                            System.Diagnostics.Contracts.Contract.Assert(svc != null);
+                            lastInlinedCallSites.Add(scs);
+                            nextOpenCallSites.UnionWith(svc.CallSites);
                         }
                         else {
-                            // Console.WriteLine("Info: Blocking: {0} - {1}", scs.callSiteExpr, GetPersistentID(scs));
                             prover.LogComment("blocking " + scs.callSite.calleeName + " from " + parent[scs].callSite.calleeName);
+                            prover.Assert(prover.VCExprGen.Not(scs.callSiteExpr), true, name: "assert_" + scs.callSiteExpr.ToString());
                             lastBlockedCallSites.Add(scs);
-                            
-                            callsite2proverName[scs] =  "blocked_" + scs.callSiteExpr.ToString();
-                            prover.Assert(prover.VCExprGen.Not(scs.callSiteExpr), true, name: "blocked_" + scs.callSiteExpr.ToString());
                         }
                     }
 
@@ -1765,7 +1751,7 @@ namespace CoreLib
                             nextSummCallSites.Add(scs);
                             var summary = summManager.GetSummary(scs);
                             prover.LogComment("Asserting summary for " + GetPersistentID(scs));
-                            prover.AssertNamed(summary, true, "summ_" + scs.callSiteExpr);
+                            prover.AssertNamed(summary, true, "summary_" + scs.callSiteExpr);
                         }
                     }
 
@@ -1797,14 +1783,15 @@ namespace CoreLib
 
                         List<StratifiedCallSite> leafNodes = lastInlinedCallSites.ToList();
 
-                        List<string> root = rootNodes.Select(cs => callsite2proverName[cs]).ToList();
-                        List<string> eqVC = inlinedCallSites.Select(cs => "eq_" + callsite2proverName[cs]).ToList();
+                        List<string> root = rootNodes.Select(cs => "assert_" + cs.callSiteExpr).ToList();
+                        List<string> eqVC = inlinedCallSites.Select(cs => "eq_assert_" + cs.callSiteExpr).ToList();
                         List<string> leaves = leafNodes.Select(cs => FormChildNode(cs, summManager, recBound)).ToList();
 
                         root.AddRange(eqVC);
 
+                        //optimization on summary
                         var lastSummarizedCallSites = partitionStack.Peek().nextSummarizedCallSites;
-                        List<string> summaried = inlinedCallSites.Where(cs => lastSummarizedCallSites.Contains(cs)).Select(cs => "summ_" + cs.callSiteExpr).ToList();
+                        List<string> summaried = inlinedCallSites.Where(cs => lastSummarizedCallSites.Contains(cs)).Select(cs => "summary_" + cs.callSiteExpr).ToList();
                         root.AddRange(summaried);
 
                         //ComputeSummaries
@@ -1824,14 +1811,7 @@ namespace CoreLib
                         openCallSites.ExceptWith(nextOpenCallSites);
                         blockedCallSites.ExceptWith(lastBlockedCallSites);
                         inlinedCallSites.ExceptWith(lastInlinedCallSites);
-
-                        foreach (var cs in lastBlockedCallSites) {
-                            callsite2proverName.Remove(cs);
-                        }
-                        foreach (var cs in lastInlinedCallSites) {
-                            callsite2proverName.Remove(cs);
-                            attachedVC.Remove(cs);
-                        }
+                        foreach(var cs in lastInlinedCallSites) attachedVC.Remove(cs);
 
                         TiState topState = partitionStack.Pop();
                         topState.ApplyState(ref lastInlinedCallSites, ref lastBlockedCallSites, ref nextOpenCallSites, ref nextSummCallSites);
@@ -1851,7 +1831,7 @@ namespace CoreLib
                                 nextSummCallSites.Add(scs);
                                 var summary = summManager.GetSummary(scs);
                                 prover.LogComment("Asserting summary for " + GetPersistentID(scs));
-                                prover.AssertNamed(summary, true, "summ_" + scs.callSiteExpr);
+                                prover.AssertNamed(summary, true, "summary_" + scs.callSiteExpr);
                             }
                         }
                     }
