@@ -1462,6 +1462,10 @@ namespace CoreLib
                 return this.summaries.ContainsKey(cs.callSite.calleeName);
             }
 
+            public int RecDepth(StratifiedCallSite cs) {
+                return this.summaries[cs.callSite.calleeName].recDepth;
+            }
+
             private VCExpr AbstractifySummary(StratifiedCallSite scs, StratifiedVC vc, VCExpr summary) {
                 String methodName = scs.callSite.calleeName;
                 SummaryWrapper sumWrapper = summaries[methodName];
@@ -1523,6 +1527,7 @@ namespace CoreLib
                 public List<VCExprVar> absInterfaceVars;
                 private VCExpr summary;
                 private ProverInterface prover;
+                public int recDepth;
                 public int useCount { get; private set;}
                 public int updateCount { get; private set;}
                 public int vcSize { get; private set;}
@@ -1547,13 +1552,14 @@ namespace CoreLib
                 }
 
                 public void UpdateSummary(VCExpr summary, int recDepth) {
-                    if (this.summary == null) {
+                    if (this.summary == null || this.recDepth > recDepth) {
                         this.summary = summary;
                     }
                     else {
                         this.summary = prover.VCExprGen.And(this.summary, summary);
                     }
 
+                    this.recDepth = recDepth;
                     this.updateCount++;
                 }
 
@@ -1597,10 +1603,8 @@ namespace CoreLib
                 if (HasExceededRecursionDepth(childCS, recBound)) {
                     nodes.Add("assert_" + childCS.callSiteExpr);
                 }
-                else {
-                    if (summManager.Contains(childCS)) {
-                        nodes.Add("summary_" + childCS.callSiteExpr);
-                    }
+                else if (summManager.Contains(childCS) && summManager.RecDepth(childCS) <= RecursionDepth(childCS)) {
+                    nodes.Add("summary_" + childCS.callSiteExpr);
                 }
             }
 
@@ -1747,7 +1751,7 @@ namespace CoreLib
                     Push(); //new frame for summary
 
                     foreach (var scs in nextOpenCallSites) {
-                        if (summManager.Contains(scs)) {
+                        if (summManager.Contains(scs) && summManager.RecDepth(scs) <= RecursionDepth(scs)) {
                             nextSummCallSites.Add(scs);
                             var summary = summManager.GetSummary(scs);
                             prover.LogComment("Asserting summary for " + GetPersistentID(scs));
@@ -1827,7 +1831,7 @@ namespace CoreLib
 
                         nextSummCallSites.Clear();
                         foreach (var scs in nextOpenCallSites) {
-                            if (summManager.Contains(scs)) {
+                            if (summManager.Contains(scs) && summManager.RecDepth(scs) <= RecursionDepth(scs)) {
                                 nextSummCallSites.Add(scs);
                                 var summary = summManager.GetSummary(scs);
                                 prover.LogComment("Asserting summary for " + GetPersistentID(scs));
