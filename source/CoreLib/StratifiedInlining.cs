@@ -1449,115 +1449,142 @@ namespace CoreLib
             return outcome;
         }
 
-        public string FormLeafNode(StratifiedCallSite cs, Dictionary<StratifiedCallSite, string> callsite2proverName) {
-            string query = "(and inlined_" + cs.callSiteExpr.ToString();
-
-            foreach (var childCS in attachedVC[cs].CallSites) {
-                if (callsite2proverName.ContainsKey(childCS))
-                    query += " " + callsite2proverName[childCS];
-            }
-
-            query  += ")";
-            return query;
-        }
-
         public class SummaryManager {
-            private Dictionary<String, VCExpr> summaries;
-            private Dictionary<String, List<VCExprVar>> methodName2AbsInterfaceVars;
+            private Dictionary<String, SummaryWrapper> summaries;
             private ProverInterface prover;
-            private int abstractVarCounter;
             
             public SummaryManager(ProverInterface prover) {
-                this.summaries = new Dictionary<String, VCExpr>();
+                this.summaries = new Dictionary<String, SummaryWrapper>();
                 this.prover = prover;
-                this.abstractVarCounter = 0;
-                this.methodName2AbsInterfaceVars = new Dictionary<String, List<VCExprVar>>();
             }
 
             public Boolean Contains(StratifiedCallSite cs) {
-                //Console.WriteLine("Checking: {0} -> {1}", cs, this.summaries.ContainsKey(cs.callSite.calleeName));
                 return this.summaries.ContainsKey(cs.callSite.calleeName);
             }
 
-            public VCExpr GetSummary(StratifiedCallSite cs) {
-                return this.GetConcreteSummary(cs);
-            }
-
-            private VCExprVar CreateNewAbstractVariable(Microsoft.Boogie.Type varType) {
-                VCExprVar freshVar = prover.VCExprGen.Variable("ABS@" + abstractVarCounter, varType);
-                abstractVarCounter++;
-                return freshVar;
-            }
-
-            private VCExpr AbstractifySummary(StratifiedCallSite scs, StratifiedVC vc, VCExpr summary){
+            private VCExpr AbstractifySummary(StratifiedCallSite scs, StratifiedVC vc, VCExpr summary) {
                 String methodName = scs.callSite.calleeName;
-                
-                List<VCExprVar> absInterfaceVars;
-
-                //Form new variables for abstracting summaries
-                if (!methodName2AbsInterfaceVars.ContainsKey(methodName)) {
-                    absInterfaceVars = new List<VCExprVar>();
-                    foreach(var formalVar in vc.interfaceExprVars) {
-                        absInterfaceVars.Add(CreateNewAbstractVariable(formalVar.Type));
-                    }
-                    methodName2AbsInterfaceVars[methodName] = absInterfaceVars;
-                }
-                else {
-                    absInterfaceVars = methodName2AbsInterfaceVars[methodName];
-                }
+                SummaryWrapper sumWrapper = summaries[methodName];
                 
                 //Replace actual arguments with formal arguments
                 Dictionary<VCExprVar, VCExpr> substMapping = new Dictionary<VCExprVar, VCExpr>();
                 substMapping.Add(scs.callSiteExpr as VCExprVar, VCExpressionGenerator.True);
-                //Console.WriteLine("Abstracting: ");
                 for (int i=0; i<vc.interfaceExprVars.Count; i++) {
-                    //Console.WriteLine("\t{0} => {1}", vc.interfaceExprVars[i], absInterfaceVars[i]);
-                    substMapping.Add(vc.interfaceExprVars[i], absInterfaceVars[i]);
+                    substMapping.Add(vc.interfaceExprVars[i], sumWrapper.absInterfaceVars[i]);
                 }
 
                 VCExprSubstitution subst = new VCExprSubstitution(substMapping, new Dictionary<TypeVariable, Microsoft.Boogie.Type>());
                 SubstitutingVCExprVisitor substVisitor = new SubstitutingVCExprVisitor(prover.VCExprGen);
                 var abstractedSummary = substVisitor.Mutate(summary, subst);
 
-                //Console.WriteLine("*Conc: {0}\nAbst: {1}", prover.VCExpressionToString(summary), prover.VCExpressionToString(abstractedSummary));
-
                 return abstractedSummary;
             }
 
-            public void RecordSummary(StratifiedCallSite cs, StratifiedVC vc, VCExpr summary) {
+            public void RecordSummary(StratifiedCallSite cs, StratifiedVC vc, VCExpr summary, int recDepth) {
                 
                 if (Contains(cs) && summary == VCExpressionGenerator.True) return;
                 
                 String methodName = cs.callSite.calleeName;
-                summary = AbstractifySummary(cs, vc, summary);
-
-                if (Contains(cs)) {
-                    this.summaries[methodName] = prover.VCExprGen.And(this.summaries[methodName], summary);
+                if (!summaries.ContainsKey(methodName)) {
+                    summaries[methodName] = new SummaryWrapper(methodName, vc, prover);
                 }
-                else {
-                    this.summaries[methodName] = summary;
+                SummaryWrapper summWrapper = summaries[methodName];
+                summary = AbstractifySummary(cs, vc, summary);
+                summWrapper.UpdateSummary(summary, recDepth);
+            }
+
+            public VCExpr GetSummary(StratifiedCallSite scs) {
+
+                String methodName = scs.callSite.calleeName;
+                SummaryWrapper summWrapper = summaries[methodName];
+
+                Dictionary<VCExprVar, VCExpr> substMapping = new Dictionary<VCExprVar, VCExpr>();
+                for (int i=0; i<scs.interfaceExprs.Count; i++) {
+                    substMapping.Add(summWrapper.absInterfaceVars[i], scs.interfaceExprs[i]);
+                }
+                VCExprSubstitution subst = new VCExprSubstitution(substMapping, new Dictionary<TypeVariable, Microsoft.Boogie.Type>());
+                SubstitutingVCExprVisitor substVisitor = new SubstitutingVCExprVisitor(prover.VCExprGen);
+                var concretizedSummary = prover.VCExprGen.Implies(scs.callSiteExpr, substVisitor.Mutate(summWrapper.GetSummary(), subst));
+            
+                return concretizedSummary;
+            }
+
+            public void LogInfo() {
+                Console.WriteLine("Summary Info");
+                Console.WriteLine("Method Name,Type,Size,VC Size,Use Count,Update Count");
+                foreach (KeyValuePair<string, SummaryWrapper> entry in summaries)
+                {
+                    Console.WriteLine(entry.Value.ToString());
                 }
             }
 
-            private VCExpr GetConcreteSummary(StratifiedCallSite scs) {
-                String methodName = scs.callSite.calleeName;
+            private class SummaryWrapper {
+                private string methodName;
+                public List<VCExprVar> absInterfaceVars;
+                private VCExpr summary;
+                private ProverInterface prover;
+                public int useCount { get; private set;}
+                public int updateCount { get; private set;}
+                public int vcSize { get; private set;}
+                public int size { get {return SizeComputingVisitor.ComputeSize(this.summary);}}
 
-                List<VCExprVar> absInterfaceVars = methodName2AbsInterfaceVars[methodName];
-                VCExpr abstractedSummary = this.summaries[methodName];
-
-                Dictionary<VCExprVar, VCExpr> substMapping = new Dictionary<VCExprVar, VCExpr>();
-                
-                //Console.WriteLine("Concretizing: ");
-                for (int i=0; i<scs.interfaceExprs.Count; i++) {
-                    //Console.WriteLine("\t{0} => {1}", absInterfaceVars[i], scs.interfaceExprs[i]);
-                    substMapping.Add(absInterfaceVars[i], scs.interfaceExprs[i]);
+                private void CreateAbsInterfaceVars(StratifiedVC vc) {
+                    absInterfaceVars = new List<VCExprVar>();
+                    for (int i=0; i<vc.interfaceExprVars.Count; i++) {
+                        var formalVar = vc.interfaceExprVars[i];
+                        absInterfaceVars.Add(prover.VCExprGen.Variable("ABS@"+i, formalVar.Type));
+                    }
                 }
 
-                VCExprSubstitution subst = new VCExprSubstitution(substMapping, new Dictionary<TypeVariable, Microsoft.Boogie.Type>());
-                SubstitutingVCExprVisitor substVisitor = new SubstitutingVCExprVisitor(prover.VCExprGen);
-                var concretizedSummary = prover.VCExprGen.Implies(scs.callSiteExpr, substVisitor.Mutate(abstractedSummary, subst));
-                //Console.WriteLine("Abs: {0}\nConc: {1}", prover.VCExpressionToString(abstractedSummary), prover.VCExpressionToString(concretizedSummary));
-                return concretizedSummary;
+                public SummaryWrapper(string methodName, StratifiedVC vc, ProverInterface prover) {
+                    this.methodName = methodName;
+                    this.summary = null;
+                    this.vcSize = SizeComputingVisitor.ComputeSize(vc.vcexpr);
+                    this.useCount = 0;
+                    this.updateCount = -1; //because we want the first update to be recorded as 0
+                    this.prover = prover;
+                    this.CreateAbsInterfaceVars(vc);
+                }
+
+                public void UpdateSummary(VCExpr summary, int recDepth) {
+                    if (this.summary == null) {
+                        this.summary = summary;
+                    }
+                    else {
+                        this.summary = prover.VCExprGen.And(this.summary, summary);
+                    }
+
+                    this.updateCount++;
+                }
+
+                public VCExpr GetSummary() {
+                    this.useCount++;
+                    return this.summary;
+                }
+
+                public override string ToString(){
+                    List<String> row = new List<String>();
+                    //Method Name
+                    row.Add(methodName);
+                    
+                    //Summary Type
+                    if (this.summary == VCExpressionGenerator.True) {
+                        row.Add("True");
+                    }
+                    else if (this.summary == VCExpressionGenerator.False) {
+                        row.Add("False");
+                    }
+                    else {
+                        row.Add("<Complex>");
+                    }
+
+                    row.Add(this.size.ToString());
+                    row.Add(this.vcSize.ToString());
+                    row.Add(this.useCount.ToString());
+                    row.Add(this.updateCount.ToString());
+
+                    return String.Join(",", row);
+                }
             }
         }
 
@@ -1580,7 +1607,6 @@ namespace CoreLib
             return "(and " + String.Join(" ", nodes) + ")";
         }
 
-        //public Dictionary<StratifiedCallSite, List<StratifiedCallSite>> childrenOf = new Dictionary<StratifiedCallSite, List<StratifiedCallSite>>();
         public Outcome TraceInlining(HashSet<StratifiedCallSite> openCallSites, StratifiedInliningErrorReporter reporter, bool main, int recBound)
         {
             Console.WriteLine("Trace Inlining - Start");
@@ -1600,7 +1626,6 @@ namespace CoreLib
 
             Dictionary<StratifiedCallSite, string> callsite2proverName = new Dictionary<StratifiedCallSite, string>();
             SummaryManager summManager = new SummaryManager(prover);
-            //childrenOf = new Dictionary<StratifiedCallSite, List<StratifiedCallSite>>();
             
             var boundHit = false;
 
@@ -1609,36 +1634,6 @@ namespace CoreLib
             partitionStack.Push(TiState.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites, nextSummCallSites));
             while (true)
             {
-                // Console.WriteLine("-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-");
-                // Console.WriteLine("All Open Callsites:");
-                // foreach (var cs in openCallSites) {
-                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                // }
-                // Console.WriteLine("All Blocked Callsites:");
-                // foreach (var cs in blockedCallSites) {
-                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                // }
-                // Console.WriteLine("All Inlined Callsites:");
-                // foreach (var cs in inlinedCallSites) {
-                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                // }
-                // Console.WriteLine("Last Inlined Callsites:");
-                // foreach (var cs in lastInlinedCallSites) {
-                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                // }
-                // Console.WriteLine("Last Blocked Callsites:");
-                // foreach (var cs in lastBlockedCallSites) {
-                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                // }
-                // Console.WriteLine("Next Open Callsites:");
-                // foreach (var cs in nextOpenCallSites) {
-                //     Console.WriteLine("\t{0} - {1}", cs.callSiteExpr, GetPersistentID(cs));
-                // }
-                // Console.WriteLine("Prover State:");
-                // foreach (var key in callsite2proverName.Keys) {
-                //     Console.WriteLine("{0} -> {1}", GetPersistentID(key), callsite2proverName[key]);
-                // }
-                // Console.WriteLine("-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-");
 
                 // Check timeout
                 if (CommandLineOptions.Clo.ProverKillTime != -1)
@@ -1698,7 +1693,6 @@ namespace CoreLib
                 }
 
                 reporter.reportTrace = false;
-                //reporter.reportTraceIfNothingToExpand = true;
                 reporter.callSitesToExpand = new List<StratifiedCallSite>();
                 qStartTime = DateTime.Now;
                 outcome = CheckVC(reporter);
@@ -1819,7 +1813,7 @@ namespace CoreLib
                         //RecordSummaries
                         for (int i=0; i<leafNodes.Count; i++) {
                             System.Diagnostics.Contracts.Contract.Assert(summaries[i] != null);
-                            summManager.RecordSummary(leafNodes[i], attachedVC[leafNodes[i]], summaries[i]);
+                            summManager.RecordSummary(leafNodes[i], attachedVC[leafNodes[i]], summaries[i], RecursionDepth(leafNodes[i]));
                         }
 
                         Pop(); // for-overapprox query
