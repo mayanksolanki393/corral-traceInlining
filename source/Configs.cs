@@ -476,6 +476,11 @@ namespace cba
             {
                 cba.Util.CorralConfig.traceInlining = true;
             }
+            else if (flag.StartsWith("/clientId:"))
+            {
+                var split = flag.Split(sep);
+                cba.Util.CorralConfig.clientId = Int32.Parse(split[1]);
+            }
             else if (flag.StartsWith("/timeLimit:"))
             {
                 var split = flag.Split(sep);

@@ -36,6 +36,7 @@
     <ProjectReference Include="source\ExplainError\ExplainError-NetCore.csproj" />
     <ProjectReference Include="source\ProgTransformation\ProgTransformation-NetCore.csproj" />
     <ProjectReference Include="source\Util\CorralUtil-NetCore.csproj" />
+    <ProjectReference Include="AddOns\MessagePassing\MessagePassing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

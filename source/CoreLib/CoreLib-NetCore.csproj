@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\boogie\Source\VCGeneration\VCGeneration-NetCore.csproj" />
     <ProjectReference Include="..\ProgTransformation\ProgTransformation-NetCore.csproj" />
     <ProjectReference Include="..\Util\CorralUtil-NetCore.csproj" />
+    <ProjectReference Include="..\..\AddOns\MessagePassing\MessagePassing.csproj" />
   </ItemGroup>
 
   <ItemGroup>
