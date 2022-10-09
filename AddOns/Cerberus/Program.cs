@@ -7,7 +7,8 @@ namespace Cerberus {
     class Program {
         static public void Main(String[] args) {
             string serverUrl = "http://localhost:5000/";
-            string inputFile = "/home/smayank/Desktop/MS/trace-interpol-3-oct/corral-traceInlining/mytests/cerberus/" + args[1];
+            string inputDirectory = "/home/smayank/Desktop/MS/trace-interpol-3-oct/corral-traceInlining/mytests/cerberus/";
+            string inputFile =  inputDirectory + args[1];
             int numClients = 3;
 
             if (args[0] == "-master") {
@@ -20,13 +21,18 @@ namespace Cerberus {
                 
                 Console.WriteLine("starting Clients");
 
+                String treeDirctory = Path.Join(inputDirectory, ".cerberus", args[1], "trees");
+                string[] treeFiles = Directory.GetFiles(treeDirctory, "*.tree", SearchOption.TopDirectoryOnly);
+
+                numClients = Math.Min(numClients, treeFiles.Length);
+
                 for (var i=0; i<numClients; i++) {
                     var process = new Process
                     {
                         StartInfo = new ProcessStartInfo
                         {
                             FileName = "Cerberus",
-                            Arguments = "-slave " + args[1],
+                            Arguments = "-slave " + args[1] + " " + treeFiles[i],
                             UseShellExecute = false, RedirectStandardOutput = true,
                             CreateNoWindow = true
                         }
@@ -35,11 +41,10 @@ namespace Cerberus {
                 }
 
                 masterThread.Join();
-
             }
             else {
                 Console.WriteLine("Starting Slave");
-                CorralDriver driver = new CorralDriver(serverUrl, inputFile);
+                CorralDriver driver = new CorralDriver(serverUrl, inputFile, args[2]);
                 driver.Start();
             }
             
@@ -49,10 +54,12 @@ namespace Cerberus {
     class CorralDriver {
         private string serverUrl;
         private string inputFile;
+        private string bootStrapFile;
 
-        public CorralDriver(string serverUrl, string inputFile) {
+        public CorralDriver(string serverUrl, string inputFile, string bootStrapFile="") {
             this.serverUrl = serverUrl;
             this.inputFile = inputFile;
+            this.bootStrapFile = bootStrapFile;
         }
         
         public void Start() {
@@ -68,7 +75,7 @@ namespace Cerberus {
                     StartInfo = new ProcessStartInfo
                     {
                         FileName = "corral",
-                        Arguments = "/clientId:" + clientId + " /traceInlining /proverLog:"+logFileName+" /recursionBound:3 /trackAllVars /si " + inputFile,
+                        Arguments = "/clientId:" + clientId + " /traceInlining /proverLog:" + logFileName + " /recursionBound:3 /trackAllVars /si /bootstrapFile:" + bootStrapFile + " " + inputFile,
                         UseShellExecute = false, RedirectStandardOutput = true,
                         CreateNoWindow = true
                     }

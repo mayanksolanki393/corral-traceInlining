@@ -199,6 +199,7 @@ namespace cba
 
             Configs config = new Configs();
             config.inputFile = inputFile;
+            CorralConfig.inputFile = inputFile;
 
             foreach (var flag in flags)
             {
@@ -480,6 +481,23 @@ namespace cba
             {
                 var split = flag.Split(sep);
                 cba.Util.CorralConfig.clientId = Int32.Parse(split[1]);
+            }
+            else if (flag.StartsWith("/randomInlining:"))
+            {
+                var split = flag.Split(sep);
+                cba.Util.CorralConfig.randomInlining = true;
+                cba.Util.CorralConfig.randomInliningDepth = Int32.Parse(split[1]);
+            }
+            else if (flag.StartsWith("/randomInlining"))
+            {
+                var split = flag.Split(sep);
+                cba.Util.CorralConfig.randomInlining = true;
+                cba.Util.CorralConfig.randomInliningDepth = 5;
+            }
+            else if (flag.StartsWith("/bootstrapFile:"))
+            {
+                var split = flag.Split(sep);
+                cba.Util.CorralConfig.bootstrapFile = split[1];
             }
             else if (flag.StartsWith("/timeLimit:"))
             {

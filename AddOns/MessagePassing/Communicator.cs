@@ -4,7 +4,12 @@ using System.Text.Json;
 namespace MessagePassing {
 
     public abstract class Communicator {
-        protected int senderId;
+        protected int Id;
+        
+        public int GetId(){
+            return Id;
+        }
+
         public abstract int Register();
         public abstract bool Unregister();
         public abstract bool Ping();
@@ -23,15 +28,15 @@ namespace MessagePassing {
             this.httpClient = new HttpClient();
             httpClient.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
             this.serverUrl = serverUrl;
-            this.senderId = senderId;
+            this.Id = senderId;
         }
 
         private List<Message> SendMessage(Message request, Object body=null) {
-            if (senderId == -1 && request.requestType != "register") {
+            if (Id == -1 && request.requestType != "register") {
                 throw new Exception("You must call register on Communicator before calling any other method");
             }
 
-            request.senderId = senderId;
+            request.senderId = Id;
             request.body = body == null ? "" : body;
 
             var json = JsonSerializer.Serialize(request);
@@ -48,8 +53,8 @@ namespace MessagePassing {
                 throw new Exception("Unexpected Response on Register");
             }
 
-            senderId = ((JsonElement)response[0].body).GetInt32();
-            return senderId;
+            Id = ((JsonElement)response[0].body).GetInt32();
+            return Id;
         }
 
         public override bool Unregister() {

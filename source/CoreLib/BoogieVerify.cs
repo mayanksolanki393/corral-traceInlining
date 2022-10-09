@@ -16,6 +16,10 @@ namespace cba.Util
     {
         public static bool underWidenSI = false;
         public static bool traceInlining = false;
+        public static bool randomInlining = false;
+        public static int randomInliningDepth = 5;
+        public static string bootstrapFile = "";
+        public static string inputFile = "";
         public static int clientId = -1;
     }
     public static class BoogieVerify
