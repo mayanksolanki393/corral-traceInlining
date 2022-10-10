@@ -13,6 +13,7 @@ using Microsoft.Boogie.GraphUtil;
 using Microsoft.Boogie.SMTLib;
 using MessagePassing;
 using System.Text.Json;
+using System.IO;
 
 namespace CoreLib
 {
@@ -1469,6 +1470,17 @@ namespace CoreLib
 
             public void InitCommunicator(string serverUrl, int clientId) {
                 this.comm = new HttpCommunicator(serverUrl, clientId);
+                try {
+                    if(comm.Ping().ToString() != "pong") {
+                        this.comm = null;
+                        Console.WriteLine("Connection Failed: Server gave bad response");
+                    }
+                }
+                catch (Exception ex) {
+                    Console.WriteLine("Connection Failed: Server not started");
+                    this.comm = null;
+                }
+                
             }
 
             public void ShareSummaries(List<StratifiedCallSite> callsites) {
@@ -1531,6 +1543,7 @@ namespace CoreLib
                 String methodName = cs.callSite.calleeName;
                 if (!summaries.ContainsKey(methodName)) {
                     summaries[methodName] = new SummaryWrapper(methodName, this);
+                    summaries[methodName].CreateAbsInterfaceVars(vc.interfaceExprVars.Count);
                 }
                 SummaryWrapper summWrapper = summaries[methodName];
                 summary = AbstractifySummary(cs, vc, summary);
@@ -1591,7 +1604,7 @@ namespace CoreLib
                         return "ABS@" + absVarCount++;
                     }
                 }
-                private void CreateAbsInterfaceVars(int count) {
+                public void CreateAbsInterfaceVars(int count) {
                     absInterfaceVars = new List<VCExprVar>();
                     for (int i=0; i<count; i++) {
                         //The type of var in this context does not matter as this variable is only a placeholder
@@ -1745,8 +1758,20 @@ namespace CoreLib
             HashSet<StratifiedCallSite> nextOpenCallSites = new HashSet<StratifiedCallSite>(openCallSites);
             HashSet<StratifiedCallSite> nextSummCallSites = new HashSet<StratifiedCallSite>();
 
+            bool bootStrapMode = false;
+            HashSet<string> bootstrapCallSites = new HashSet<string>();
+
+            if (!String.IsNullOrEmpty(CorralConfig.bootstrapFile)) {
+                string text = File.ReadAllText(CorralConfig.bootstrapFile);
+                bootstrapCallSites = new HashSet<string>(text.Trim().Split(","));
+                if (bootstrapCallSites.Count > 0) {
+                    bootStrapMode = true;
+                }
+            }
+            
+
             SummaryManager summManager = new SummaryManager(prover, implName2StratifiedInliningInfo);
-            summManager.InitCommunicator("http://localhost:5000/", CorralConfig.clientId);
+            if (CorralConfig.clientId != -1) summManager.InitCommunicator("http://localhost:5000/", CorralConfig.clientId);
             var boundHit = false;
 
             int iterCount = 0;
@@ -1795,38 +1820,47 @@ namespace CoreLib
                 // Console.WriteLine("\nRunning overapprox query - start");
                 prover.LogComment("Running overapprox query - start");
                 Push();
-                var softAssumptions = new List<VCExpr>();
-                foreach (StratifiedCallSite cs in openCallSites)
-                {
-                    // Stop if we've reached the recursion bound or
-                    // the stack-depth bound (if there is one)
-                    if (HasExceededRecursionDepth(cs, recBound) ||
-                        (CommandLineOptions.Clo.StackDepthBound > 0 &&
-                        StackDepth(cs) > CommandLineOptions.Clo.StackDepthBound))
-                    {
-                        // Console.WriteLine("Info: Blocking: RecurBoundReached: {0}", GetPersistentID(cs));
-                        prover.LogComment("Blocking: RecurBoundReached: "+ GetPersistentID(cs));
-                        prover.AssertNamed(cs.callSiteExpr, false, "assert_" + cs.callSiteExpr);
-                        procsHitRecBound.Add(cs.callSite.calleeName);
-                        //Console.WriteLine("Proc {0} hit rec bound of {1}", cs.callSite.calleeName, recBound);
-                        boundHit = true;
-                    }
+
+                List<StratifiedCallSite> toExpand = new List<StratifiedCallSite>();
+                if (bootStrapMode) {
+                    toExpand = openCallSites.Where(x => bootstrapCallSites.Contains(GetPersistentID(x))).ToList();
+                    toExpand.ForEach(x => bootstrapCallSites.Remove(GetPersistentID(x)));
+                    bootStrapMode = bootstrapCallSites.Count > 0;
+                    outcome = Outcome.Errors;
                 }
+                else {
+                    foreach (StratifiedCallSite cs in openCallSites)
+                    {
+                        // Stop if we've reached the recursion bound or
+                        // the stack-depth bound (if there is one)
+                        if (HasExceededRecursionDepth(cs, recBound) ||
+                            (CommandLineOptions.Clo.StackDepthBound > 0 &&
+                            StackDepth(cs) > CommandLineOptions.Clo.StackDepthBound))
+                        {
+                            // Console.WriteLine("Info: Blocking: RecurBoundReached: {0}", GetPersistentID(cs));
+                            prover.LogComment("Blocking: RecurBoundReached: "+ GetPersistentID(cs));
+                            prover.AssertNamed(cs.callSiteExpr, false, "assert_" + cs.callSiteExpr);
+                            procsHitRecBound.Add(cs.callSite.calleeName);
+                            //Console.WriteLine("Proc {0} hit rec bound of {1}", cs.callSite.calleeName, recBound);
+                            boundHit = true;
+                        }
+                    }
 
-                reporter.reportTrace = false;
-                reporter.callSitesToExpand = new List<StratifiedCallSite>();
-                qStartTime = DateTime.Now;
-                outcome = CheckVC(reporter);
-                
-                Console.WriteLine("Info: OQ Outcome: {0} ({1})", outcome, (DateTime.Now - qStartTime).TotalMilliseconds);
-
+                    reporter.reportTrace = false;
+                    reporter.callSitesToExpand = new List<StratifiedCallSite>();
+                    qStartTime = DateTime.Now;
+                    outcome = CheckVC(reporter);
+                    toExpand = reporter.callSitesToExpand;
+                    
+                    Console.WriteLine("Info: OQ Outcome: {0} ({1})", outcome, (DateTime.Now - qStartTime).TotalMilliseconds);
+                }
                 if (outcome == Outcome.Errors)
                 {
                     Pop(); // Pops the over approx part
                     Console.WriteLine("Running overapprox query - end - Outcome: "+ outcome);
                     prover.LogComment("Running overapprox query - end - Outcome: "+ outcome);
 
-                    if (reporter.callSitesToExpand.Count == 0) {
+                    if (toExpand.Count == 0) {
                         outcome = Outcome.Inconclusive;
                         break;
                     }
@@ -1835,15 +1869,6 @@ namespace CoreLib
                     partitionStack.Push(TiState.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites, nextSummCallSites));
                     prover.LogComment("push - newframe for next inlining");
                     Push(); // push-newframe for next inlining
-
-                    var toExpand = reporter.callSitesToExpand;
-                    if (BoogieVerify.options.extraFlags.Contains("SiStingy"))
-                    {
-                        var min = toExpand.Select(cs => RecursionDepth(cs)).Min();
-                        toExpand = toExpand.Where(cs => RecursionDepth(cs) == min).ToList();
-                    }
-
-                    System.Diagnostics.Contracts.Contract.Assert(toExpand.Count > 0);
 
                     lastInlinedCallSites.Clear();
                     lastBlockedCallSites.Clear();
@@ -1980,7 +2005,7 @@ namespace CoreLib
                 Pop(); //for inlining-frame
             }
 
-            summManager.comm.ReportFinished(outcome.ToString());
+            if (summManager.isConnected) summManager.comm.ReportFinished(outcome.ToString());
 
             prover.LogComment("Trace Inlining - Ended");
             Console.WriteLine("Trace Inlining - Ended");
