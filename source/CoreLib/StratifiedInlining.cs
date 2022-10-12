@@ -1471,7 +1471,20 @@ namespace CoreLib
             public void InitCommunicator(string serverUrl, int clientId) {
                 this.comm = new HttpCommunicator(serverUrl, clientId);
                 try {
-                    if(comm.Ping().ToString() != "pong") {
+                    if(comm.Ping()) {
+                        var polling = new System.Threading.Tasks.Task(() =>
+                        {
+                            while(true) {
+                                System.Threading.Thread.Sleep(500);
+                                if(!comm.Ping()) {
+                                    Console.Write("Server is not responing or asked to stop");
+                                    Process.GetCurrentProcess().Kill();
+                                }
+                            }
+                        });
+                        polling.Start();
+                    }
+                    else {
                         this.comm = null;
                         Console.WriteLine("Connection Failed: Server gave bad response");
                     }
