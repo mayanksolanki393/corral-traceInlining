@@ -1,4 +1,4 @@
-﻿﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
@@ -2013,6 +2013,101 @@ namespace CoreLib
             return outcome;
         }
 
+        public Outcome GenerateRandomInlining(HashSet<StratifiedCallSite> openCallSites, StratifiedInliningErrorReporter reporter, int recBound) {
+            int depth = 0;
+            Random rnd = new Random();
+            bool isValid = false;
+            List<string> inlinedCallSites = new List<string>();
+
+            while (depth < CorralConfig.randomInliningDepth) {
+                foreach (StratifiedCallSite cs in openCallSites)
+                {
+                    // Stop if we've reached the recursion bound or
+                    // the stack-depth bound (if there is one)
+                    if (HasExceededRecursionDepth(cs, recBound) ||
+                        (CommandLineOptions.Clo.StackDepthBound > 0 &&
+                        StackDepth(cs) > CommandLineOptions.Clo.StackDepthBound))
+                    {
+                        prover.AssertNamed(cs.callSiteExpr, false, "assert_" + cs.callSiteExpr);
+                    }
+                }
+                reporter.reportTrace = false;
+                reporter.callSitesToExpand = new List<StratifiedCallSite>();
+                Outcome outcome = CheckVC(reporter);
+
+                if (outcome != Outcome.Errors) {
+                    Console.WriteLine("Status: Failed to generate tree");
+                    return Outcome.Inconclusive;
+                }
+                
+                if (0 == rnd.Next(3)) {
+                    //Random Blocking
+                    int callSiteCount = reporter.callSitesToExpand.Count;
+                    StratifiedCallSite randomCallSite = reporter.callSitesToExpand[rnd.Next(callSiteCount)];
+                    isValid = true;
+                    Console.WriteLine("blocking: {0} : {1}", depth, GetPersistentID(randomCallSite));
+                    prover.Assert(randomCallSite.callSiteExpr, false);
+                    openCallSites.Remove(randomCallSite);
+                }
+                else {
+                    HashSet<StratifiedCallSite> toRemove = new HashSet<StratifiedCallSite>();
+                    HashSet<StratifiedCallSite> nextOpenCallSites = new HashSet<StratifiedCallSite>();
+                    foreach (var cs in openCallSites) {
+                        if (reporter.callSitesToExpand.Contains(cs)) {
+                            var svc = Expand(cs);
+                            
+                            inlinedCallSites.Add(GetPersistentID(cs));
+                            System.Diagnostics.Contracts.Contract.Assert(svc != null);
+                            toRemove.Add(cs);
+                            nextOpenCallSites.UnionWith(svc.CallSites);
+                        }
+                        // else {
+                        //     prover.Assert(cs.callSiteExpr, false);
+                        // }
+                        
+                    }
+                    openCallSites.ExceptWith(toRemove);
+                    openCallSites.UnionWith(nextOpenCallSites);
+                }
+                if (openCallSites.Count == 0) {
+                    break;
+                }
+                depth++;
+            }
+            if (isValid) {
+                DumpCallsites(inlinedCallSites, getRandomFileName());
+                Console.WriteLine("Status: Tree File Generated");
+            }
+            else {
+                Console.WriteLine("Status: Failed to generate valid tree");
+            }
+            
+            return Outcome.Inconclusive;
+        }
+
+        public string getRandomFileName()
+        {
+            string directoryPath = Path.GetDirectoryName(CorralConfig.inputFile);
+            string inputfileName = Path.GetFileName(CorralConfig.inputFile);
+            string outputDirectory = Path.Combine(directoryPath, ".cerberus", inputfileName);
+            Directory.CreateDirectory(outputDirectory);
+
+            Random rnd = new Random();
+            string fileName = Path.Combine(outputDirectory, rnd.Next(100000) + ".tree");
+            while (File.Exists(fileName))
+            {
+                fileName = Path.Combine(outputDirectory, rnd.Next(100000) + ".tree");
+            }
+            return fileName;
+        }
+
+        public void DumpCallsites(List<String> callsites, string filename)
+        {
+            var str = new System.IO.StreamWriter(filename);
+            str.Write(string.Join(",", callsites));
+            str.Close();
+        }
+
         void ForceInline(HashSet<StratifiedCallSite> openCallSites, int recBound)
         {
             do
@@ -2401,6 +2496,10 @@ namespace CoreLib
             else if (cba.Util.CorralConfig.traceInlining)
             {
                 outcome = TraceInlining(openCallSites, reporter, true, CommandLineOptions.Clo.RecursionBound);
+            }
+            else if (cba.Util.CorralConfig.randomInlining)
+            {
+                outcome = GenerateRandomInlining(openCallSites, reporter, CommandLineOptions.Clo.RecursionBound);
             }
             else
             {
