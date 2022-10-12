@@ -1683,7 +1683,7 @@ namespace CoreLib
                     SummarySharable serializable = new SummarySharable();
                     serializable.methodName = methodName;
                     serializable.interfaceVarNames = absInterfaceVars.Select(x => x.Name).ToList();
-                    serializable.summary = summary.ToString();
+                    serializable.summary = summaryManager.prover.VCExpressionToString(this.summary);
                     serializable.recDepth = recDepth;
                     return serializable;
                 }
@@ -1691,7 +1691,12 @@ namespace CoreLib
                 public static SummaryWrapper UnWrap(SummarySharable sharedSummary, SummaryManager summaryManager) {
                     SummaryWrapper newSummary = new SummaryWrapper(sharedSummary.methodName, summaryManager);
                     newSummary.CreateAbsInterfaceVars(sharedSummary.interfaceVarNames);
-                    newSummary.UpdateSummary(summaryManager.prover.Parse(sharedSummary.summary), sharedSummary.recDepth);
+
+                    Dictionary<string, VCExpr> bound = new Dictionary<String, VCExpr>();
+                    newSummary.absInterfaceVars.ForEach(x => bound.Add(x.Name, x));
+
+                    VCExpr parsedSummary = summaryManager.prover.Parse(sharedSummary.summary, bound);
+                    newSummary.UpdateSummary(parsedSummary, sharedSummary.recDepth);
                     newSummary.isShared = true;
                     return newSummary;
                 }
@@ -1700,7 +1705,7 @@ namespace CoreLib
             public class SummarySharable {
                 public string methodName { get; set; }
                 public List<string> interfaceVarNames { get; set; }
-                public string summary;
+                public string summary { get; set; }
                 public int recDepth { get; set; }
 
                 public SummarySharable() {
