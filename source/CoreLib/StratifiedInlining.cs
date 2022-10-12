@@ -1758,12 +1758,12 @@ namespace CoreLib
             
         //     return parsered;
         // }
+
         public Outcome TraceInlining(HashSet<StratifiedCallSite> openCallSites, StratifiedInliningErrorReporter reporter, bool main, int recBound)
         {
             Console.WriteLine("Trace Inlining - Start");
             prover.LogComment("Trace Inlining - Start");
             Outcome outcome = Outcome.Inconclusive;
-            DateTime qStartTime;
             
             Stack<TiState> partitionStack = new Stack<TiState>();
             
@@ -1775,24 +1775,21 @@ namespace CoreLib
             HashSet<StratifiedCallSite> nextOpenCallSites = new HashSet<StratifiedCallSite>(openCallSites);
             HashSet<StratifiedCallSite> nextSummCallSites = new HashSet<StratifiedCallSite>();
 
-            bool bootStrapMode = false;
-            HashSet<string> bootstrapCallSites = new HashSet<string>();
-
-            if (!String.IsNullOrEmpty(CorralConfig.bootstrapFile)) {
-                string text = File.ReadAllText(CorralConfig.bootstrapFile);
-                bootstrapCallSites = new HashSet<string>(text.Trim().Split(","));
-                if (bootstrapCallSites.Count > 0) {
-                    bootStrapMode = true;
-                }
-            }
-            
-
-            SummaryManager summManager = new SummaryManager(prover, implName2StratifiedInliningInfo);
-            if (CorralConfig.clientId != -1) summManager.InitCommunicator("http://localhost:5000/", CorralConfig.clientId);
             var boundHit = false;
-
             int iterCount = 0;
+            DateTime qStartTime;
+            bool bootStrapMode = false;
+            HashSet<String> bootstrapCallSites = new HashSet<String>();
+            if (!String.IsNullOrEmpty(CorralConfig.bootstrapFile)) 
+            {
+                string text = File.ReadAllText(CorralConfig.bootstrapFile);
+                bootstrapCallSites = new HashSet<String>(text.Trim().Split(","));
+                bootStrapMode = bootstrapCallSites.Count > 0;
+            }
 
+            SummaryManager summManager = new SummaryManager(prover);
+            if (CorralConfig.clientId != -1) summManager.InitCommunicator(CorralConfig.serverUrl, CorralConfig.clientId);
+        
             Push(); //inlining of sudo-main
             Push(); //summaries of sudo-main
             partitionStack.Push(TiState.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites, nextSummCallSites));
@@ -1815,8 +1812,6 @@ namespace CoreLib
                 }
 
                 // underapproximate query
-                Console.WriteLine("-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-");
-                // Console.WriteLine("Running underapprox query - start");
                 prover.LogComment("Running underapprox query - start");
                 Push();
                 foreach (StratifiedCallSite cs in openCallSites)
@@ -1824,20 +1819,15 @@ namespace CoreLib
                     prover.LogComment("Blocking: " + GetPersistentID(cs));
                     prover.Assert(prover.VCExprGen.Not(cs.callSiteExpr), true);
                 }
-                MacroSI.PRINT_DEBUG("    - check");
                 reporter.reportTrace = main;
                 outcome = CheckVC(reporter);
                 Pop();
-                // Console.WriteLine("Running underapprox query - end - Outcome: "+ outcome);
                 prover.LogComment("Running underapprox query - end - Outcome: "+ outcome);
-                MacroSI.PRINT_DEBUG("    - checked: " + outcome);
                 if (outcome != Outcome.Correct) break;
 
                 // overapproximate query
-                // Console.WriteLine("\nRunning overapprox query - start");
                 prover.LogComment("Running overapprox query - start");
                 Push();
-
                 List<StratifiedCallSite> toExpand = new List<StratifiedCallSite>();
                 if (bootStrapMode) {
                     toExpand = openCallSites.Where(x => bootstrapCallSites.Contains(GetPersistentID(x))).ToList();
@@ -1854,11 +1844,9 @@ namespace CoreLib
                             (CommandLineOptions.Clo.StackDepthBound > 0 &&
                             StackDepth(cs) > CommandLineOptions.Clo.StackDepthBound))
                         {
-                            // Console.WriteLine("Info: Blocking: RecurBoundReached: {0}", GetPersistentID(cs));
                             prover.LogComment("Blocking: RecurBoundReached: "+ GetPersistentID(cs));
                             prover.AssertNamed(cs.callSiteExpr, false, "assert_" + cs.callSiteExpr);
                             procsHitRecBound.Add(cs.callSite.calleeName);
-                            //Console.WriteLine("Proc {0} hit rec bound of {1}", cs.callSite.calleeName, recBound);
                             boundHit = true;
                         }
                     }
@@ -1871,10 +1859,10 @@ namespace CoreLib
                     
                     Console.WriteLine("Info: OQ Outcome: {0} ({1})", outcome, (DateTime.Now - qStartTime).TotalMilliseconds);
                 }
+
                 if (outcome == Outcome.Errors)
                 {
-                    Pop(); // Pops the over approx part
-                    Console.WriteLine("Running overapprox query - end - Outcome: "+ outcome);
+                    Pop(); // Pops the over-approx part
                     prover.LogComment("Running overapprox query - end - Outcome: "+ outcome);
 
                     if (toExpand.Count == 0) {
@@ -1949,12 +1937,12 @@ namespace CoreLib
                         List<StratifiedCallSite> leafNodes = lastInlinedCallSites.ToList();
 
                         List<string> root = rootNodes.Select(cs => "assert_" + cs.callSiteExpr).ToList();
-                        List<string> eqVC = inlinedCallSites.Select(cs => "eq_assert_" + cs.callSiteExpr).ToList();
-                        List<string> leaves = leafNodes.Select(cs => FormChildNode(cs, summManager, recBound)).ToList();
+                        List<string> eqRoot = inlinedCallSites.Select(cs => "eq_assert_" + cs.callSiteExpr).ToList();
+                        List<string> leaves = leafNodes.Select(cs => FormChildNode(cs, summManager, recBound, nextSummCallSites)).ToList();
 
-                        root.AddRange(eqVC);
+                        root.AddRange(eqRoot);
 
-                        //optimization on summary
+                        //?????? optimization on summary ???????
                         var lastSummarizedCallSites = partitionStack.Peek().nextSummarizedCallSites;
                         List<string> summaried = inlinedCallSites.Where(cs => lastSummarizedCallSites.Contains(cs)).Select(cs => "summary_" + cs.callSiteExpr).ToList();
                         root.AddRange(summaried);
@@ -1966,8 +1954,9 @@ namespace CoreLib
                         List<StratifiedCallSite> summariesToShare = new List<StratifiedCallSite>();
                         for (int i=0; i<leafNodes.Count; i++) {
                             System.Diagnostics.Contracts.Contract.Assert(summaries[i] != null);
-                            if (summManager.RecordSummary(leafNodes[i], attachedVC[leafNodes[i]], summaries[i], RecursionDepth(leafNodes[i]))) {
-                                summariesToShare.Add(leafNodes[i]);
+                            StratifiedCallSite leafNode = leafNodes[i];
+                            if (summManager.RecordSummary(leafNode, attachedVC[leafNode], summaries[i], RecursionDepth(leafNode))) {
+                                summariesToShare.Add(leafNode);
                             }
                         }
                         if(summManager.isConnected) summManager.ShareSummaries(summariesToShare);
@@ -2009,9 +1998,9 @@ namespace CoreLib
                     break;
                 }
 
-                if (summManager.isConnected && iterCount == 0) {
+                if (summManager.isConnected) {
+                    if (iterCount == 0) summManager.CheckSummaries();
                     iterCount = (iterCount + 1) % 5;
-                    summManager.CheckSummaries();
                 }
             }
 
@@ -2023,6 +2012,8 @@ namespace CoreLib
             }
 
             if (summManager.isConnected) summManager.comm.ReportFinished(outcome.ToString());
+
+            summManager.LogInfo();
 
             prover.LogComment("Trace Inlining - Ended");
             Console.WriteLine("Trace Inlining - Ended");
