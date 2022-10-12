@@ -1714,7 +1714,7 @@ namespace CoreLib
             }
         }
 
-        public String FormChildNode(StratifiedCallSite scs, SummaryManager summManager, int recBound) {
+        public String FormChildNode(StratifiedCallSite scs, SummaryManager summManager, int recBound, HashSet<StratifiedCallSite> summarizedCallSites) {
             List<String> nodes = new List<string>();
 
             nodes.Add("assert_" + scs.callSiteExpr);
@@ -1723,7 +1723,7 @@ namespace CoreLib
                 if (HasExceededRecursionDepth(childCS, recBound)) {
                     nodes.Add("assert_" + childCS.callSiteExpr);
                 }
-                else if (summManager.Contains(childCS) && summManager.RecDepth(childCS) <= RecursionDepth(childCS)) {
+                else if (summarizedCallSites.Contains(childCS)) {
                     nodes.Add("summary_" + childCS.callSiteExpr);
                 }
             }

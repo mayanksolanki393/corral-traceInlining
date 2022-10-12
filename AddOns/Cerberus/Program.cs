@@ -87,7 +87,8 @@ namespace Cerberus {
                     while (!process.StandardOutput.EndOfStream)
                     {
                         var line = process.StandardOutput.ReadLine();
-                        writer.WriteLine("client {0}: {1}", clientId, line);
+                        writer.WriteLine(line);
+                        writer.Flush();
                     }
                 }
  

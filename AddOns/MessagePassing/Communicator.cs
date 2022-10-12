@@ -71,7 +71,6 @@ namespace MessagePassing {
             if (response.Count != 1) {
                 throw new Exception("Unexpected Response on Ping");
             }
-
             return ((JsonElement)response[0].body).GetBoolean();
         }
 

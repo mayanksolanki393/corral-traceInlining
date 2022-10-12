@@ -21,6 +21,7 @@ namespace cba.Util
         public static string bootstrapFile = "";
         public static string inputFile = "";
         public static int clientId = -1;
+        public static string serverUrl = "http://localhost:5000/";
     }
     public static class BoogieVerify
     {

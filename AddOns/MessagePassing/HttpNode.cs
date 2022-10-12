@@ -12,19 +12,18 @@ namespace MessagePassing {
         }
 
         public override void Start() {
-            while (!isDone || nodes.Where(x => x.isRunning).Count() > 1) {
+            while (!isDone) {
                 HttpListenerContext context = _httpListener.GetContext();
                 HttpListenerRequest request = context.Request;
                 HttpListenerResponse response = context.Response;
                 ResponseThread(request, response);
-                //Thread _responseThread = new Thread(() => ResponseThread(request, response));
-                //_responseThread.IsBackground = true;
-                //_responseThread.Start();
             }
+            Stop();
         }
 
         public override void Stop() {
             _httpListener.Stop();
+            Console.WriteLine("Status: {0}", finalResult);
         }
 
         void ResponseThread(HttpListenerRequest request, HttpListenerResponse response) {
@@ -34,7 +33,6 @@ namespace MessagePassing {
             if (deserialized != null) {
                 //Deserilize Request
                 Message message = (Message) deserialized;
-                Console.WriteLine("senderId (before): {0}", message.senderId);
 
                 //Handle Request
                 List<Message> responseObj = HandleMessage(message);
@@ -47,8 +45,6 @@ namespace MessagePassing {
                 output.Write(buffer,0,buffer.Length);
                 output.Close();
             }
-
-            if (isDone) Stop(); 
         }
     }
 }

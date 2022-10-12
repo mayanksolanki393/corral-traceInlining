@@ -43,6 +43,7 @@ namespace MessagePassing {
 
     public abstract class Master : Node {
         protected List<Node> nodes;
+        protected object finalResult;
         private Dictionary<string, List<string>> summaries;
 
         public Master() : base(0) {
@@ -60,7 +61,7 @@ namespace MessagePassing {
 
             switch (requestMessage.requestType) {
                 case "broadcast":
-                    Console.WriteLine("Got Message from " + requestMessage.senderId);
+                    Console.WriteLine("Broadcast from Client: {0}", requestMessage.senderId);
                     for (int i=1; i<nodes.Count; i++) {
                         if (i != requestMessage.senderId) {
                             ((Slave) nodes[i]).SendMessage(requestMessage);
@@ -73,7 +74,8 @@ namespace MessagePassing {
                     recieverNode.SendMessage(requestMessage);
                     return new List<Message>{new Message(Message.Type.LOGISTIC, "pong", true)};
 
-                case "checkMessages": 
+                case "checkMessages":
+                    Console.WriteLine("CheckMessages from Client: {0}", requestMessage.senderId);
                     Slave slave = (Slave) nodes[requestMessage.senderId];
                     if (slave.HasMessages()) {
                         return slave.PopMessages();
@@ -120,13 +122,12 @@ namespace MessagePassing {
                     return new Message(Message.Type.LOGISTIC, "pong", true);
                 }
                 case "finished": {
-                    Console.WriteLine("We are done:");
-                    Console.WriteLine(body);
+                    finalResult = body;
 
                     for (int i=0; i<nodes.Count; i++) {
                         nodes[i].finish();
                     }
-                    this.isDone = true;
+                    this.isDone = nodes.Where(x => x.isRunning).Count() <= 1;
 
                     return new Message(Message.Type.LOGISTIC, "finished", true);
                 }
@@ -136,7 +137,6 @@ namespace MessagePassing {
         }
 
         public virtual List<Message> HandleMessage(Message message) {
-            Console.WriteLine("Got: {0} from Client {1}", message.requestType, message.senderId);
             List<Message> reply = new List<Message>();
             switch (message.messageType) {
                 case Message.Type.REQUEST:
