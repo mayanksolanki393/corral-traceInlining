@@ -1455,15 +1455,13 @@ namespace CoreLib
         public class SummaryManager {
             private Dictionary<String, SummaryWrapper> summaries;
             private Dictionary<String, SummarySharable> sharedSummaries;
-            private Dictionary<string, StratifiedInliningInfo> implName2StratifiedInliningInfo;
             private ProverInterface prover;
             public Communicator comm;
             public bool isConnected {get{return comm != null;}}
 
-            public SummaryManager(ProverInterface prover, Dictionary<string, StratifiedInliningInfo> implName2StratifiedInliningInfo) {
+            public SummaryManager(ProverInterface prover) {
                 this.summaries = new Dictionary<String, SummaryWrapper>();
                 this.sharedSummaries = new Dictionary<String, SummarySharable>();
-                this.implName2StratifiedInliningInfo = implName2StratifiedInliningInfo;
                 this.prover = prover;
                 this.comm = null;
             }
@@ -1497,14 +1495,14 @@ namespace CoreLib
             }
 
             public void ShareSummaries(List<StratifiedCallSite> callsites) {
-                if (comm == null) return;
+                if (comm == null || callsites.Count == 0) return;
 
-                List<SummarySharable> body = new List<SummarySharable>();
+                List<SummarySharable> summariesToShare = new List<SummarySharable>();
                 foreach(var scs in callsites) {
-                    body.Add(summaries[scs.callSite.calleeName].Wrap());
+                    summariesToShare.Add(summaries[scs.callSite.calleeName].Wrap());
                 }
 
-                if (!comm.Broadcast(body)) {
+                if (!comm.Broadcast(summariesToShare)) {
                     throw new Exception("Sharing Failed");
                 }
             }
@@ -1581,7 +1579,7 @@ namespace CoreLib
 
             public void LogInfo() {
                 Console.WriteLine("Summary Info");
-                Console.WriteLine("Method Name,Type,Size,Use Count,Update Count");
+                Console.WriteLine("Method Name,Type,Is Shared,Size,Use Count,Update Count");
                 foreach (KeyValuePair<string, SummaryWrapper> entry in summaries)
                 {
                     Console.WriteLine(entry.Value.ToString());
@@ -1673,6 +1671,7 @@ namespace CoreLib
                         row.Add("<Complex>");
                     }
 
+                    row.Add(this.isShared.ToString());
                     row.Add(this.size.ToString());
                     row.Add(this.useCount.ToString());
                     row.Add(this.updateCount.ToString());
