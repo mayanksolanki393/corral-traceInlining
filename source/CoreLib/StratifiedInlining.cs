@@ -1454,14 +1454,12 @@ namespace CoreLib
 
         public class SummaryManager {
             private Dictionary<String, SummaryWrapper> summaries;
-            private Dictionary<String, SummarySharable> sharedSummaries;
             private ProverInterface prover;
             public Communicator comm;
             public bool isConnected {get{return comm != null;}}
 
             public SummaryManager(ProverInterface prover) {
                 this.summaries = new Dictionary<String, SummaryWrapper>();
-                this.sharedSummaries = new Dictionary<String, SummarySharable>();
                 this.prover = prover;
                 this.comm = null;
             }
