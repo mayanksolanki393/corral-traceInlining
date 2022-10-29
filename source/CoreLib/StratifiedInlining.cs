@@ -1818,20 +1818,6 @@ namespace CoreLib
                     return Outcome.ReachedBound;
                 }
 
-                // underapproximate query
-                prover.LogComment("Running underapprox query - start");
-                Push();
-                foreach (StratifiedCallSite cs in openCallSites)
-                {
-                    prover.LogComment("Blocking: " + GetPersistentID(cs));
-                    prover.Assert(prover.VCExprGen.Not(cs.callSiteExpr), true);
-                }
-                reporter.reportTrace = main;
-                outcome = CheckVC(reporter);
-                Pop();
-                prover.LogComment("Running underapprox query - end - Outcome: " + outcome);
-                if (outcome != Outcome.Correct) break;
-
                 // overapproximate query
                 prover.LogComment("Running overapprox query - start");
                 Push();
@@ -1873,11 +1859,7 @@ namespace CoreLib
                     Pop(); // Pops the over-approx part
                     prover.LogComment("Running overapprox query - end - Outcome: " + outcome);
 
-                    if (toExpand.Count == 0) 
-                    {
-                        outcome = Outcome.Inconclusive;
-                        break;
-                    }
+                    if (toExpand.Count == 0) break;
 
                     //save current solver state and partition state
                     partitionStack.Push(TiState.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites, nextSummCallSites));
