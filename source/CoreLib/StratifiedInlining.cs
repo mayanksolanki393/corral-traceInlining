@@ -1464,6 +1464,13 @@ namespace CoreLib
                 this.comm = null;
             }
 
+            public int getInstanceId() {
+                if (isConnected) {
+                    return comm.GetId();
+                }
+                return 0;
+            }
+
             public void InitCommunicator(string serverUrl, int clientId) {
                 this.comm = new HttpCommunicator(serverUrl, clientId);
                 try {
@@ -1488,16 +1495,17 @@ namespace CoreLib
                 catch (Exception ex) {
                     Console.WriteLine("Connection Failed: Server not started");
                     this.comm = null;
+                    throw ex;
                 }
                 
             }
 
             public void ShareSummaries(HashSet<String> methodNames) {
-                if (comm == null || methodNames.Count == 0) return;
+                if (!isConnected || methodNames.Count == 0) return;
 
-                List<SummarySharable> summariesToShare = new List<SummarySharable>();
+                List<SummaryWrapper> summariesToShare = new List<SummaryWrapper>();
                 foreach(var methodName in methodNames) {
-                    summariesToShare.Add(summaries[methodName].Wrap());
+                    summariesToShare.Add(summaries[methodName]);
                 }
 
                 if (!comm.Broadcast(summariesToShare)) {
@@ -1508,30 +1516,33 @@ namespace CoreLib
             public void CheckSummaries() {
                 List<object> messages = comm.CheckMessages();
 
-                List<SummarySharable> gotSummaries = new List<SummarySharable>();
+                List<SummaryWrapper> gotSummaries = new List<SummaryWrapper>();
                 foreach (var message in messages) {
-                    gotSummaries = ((JsonElement)message).Deserialize<List<SummarySharable>>();
-                    foreach (SummarySharable sharedSummary in gotSummaries) {
+                    gotSummaries = ((JsonElement)message).Deserialize<List<SummaryWrapper>>();
+                    foreach (SummaryWrapper sharedSummary in gotSummaries) {
                         if (!summaries.ContainsKey(sharedSummary.methodName)) {
-                            summaries[sharedSummary.methodName] = SummaryWrapper.UnWrap(sharedSummary, this);
+                            sharedSummary.SetSummaryManager(this);
+                            summaries[sharedSummary.methodName] = sharedSummary;
                         }
                     }
                 }
             }
 
-            public Boolean Contains(StratifiedCallSite cs) {
-                return this.summaries.ContainsKey(cs.callSite.calleeName);
+            public Boolean Contains(StratifiedCallSite csc, int recDepth) {
+                return this.summaries.ContainsKey(Key(csc, recDepth));
             }
 
-            private VCExpr AbstractifySummary(StratifiedCallSite scs, StratifiedVC vc, VCExpr summary) {
-                String methodName = scs.callSite.calleeName;
-                SummaryWrapper sumWrapper = summaries[methodName];
-                
+            private string Key(StratifiedCallSite scs, int recDepth) {
+                return scs.callSite.calleeName + "@depth_" + recDepth;
+            }
+
+            private VCExpr AbstractifySummary(VCExpr summary, VCExprVar controlVar, List<VCExprVar> concreteInterfaceVars, List<VCExprVar> absInterfaceVars) {
+
                 //Replace actual arguments with formal arguments
                 Dictionary<VCExprVar, VCExpr> substMapping = new Dictionary<VCExprVar, VCExpr>();
-                substMapping.Add(scs.callSiteExpr as VCExprVar, VCExpressionGenerator.True);
-                for (int i=0; i<vc.interfaceExprVars.Count; i++) {
-                    substMapping.Add(vc.interfaceExprVars[i], sumWrapper.absInterfaceVars[i]);
+                substMapping.Add(controlVar, VCExpressionGenerator.True);
+                for (int i=0; i<concreteInterfaceVars.Count; i++) {
+                    substMapping.Add((VCExprVar)concreteInterfaceVars[i], absInterfaceVars[i]);
                 }
 
                 VCExprSubstitution subst = new VCExprSubstitution(substMapping, new Dictionary<TypeVariable, Microsoft.Boogie.Type>());
@@ -1542,25 +1553,19 @@ namespace CoreLib
             }
 
             public bool RecordSummary(StratifiedCallSite cs, StratifiedVC vc, VCExpr summary, int recDepth) {
-                
-                if (Contains(cs) && summary == VCExpressionGenerator.True) return false;
-                
-                String methodName = cs.callSite.calleeName;
-                if (!summaries.ContainsKey(methodName)) {
-                    summaries[methodName] = new SummaryWrapper(methodName, this);
-                    summaries[methodName].CreateAbsInterfaceVars(vc.interfaceExprVars.Count);
-                }
-                SummaryWrapper summWrapper = summaries[methodName];
-                summary = AbstractifySummary(cs, vc, summary);
-                summWrapper.UpdateSummary(summary, recDepth);
+                if (summary == VCExpressionGenerator.True) return false;
 
+                string key = Key(cs, recDepth);
+                if (!summaries.ContainsKey(key)) summaries[key] = new SummaryWrapper(key, this, vc);
+                SummaryWrapper summWrapper = summaries[key];
+                summary = AbstractifySummary(summary, (VCExprVar) cs.callSiteExpr, vc.interfaceExprVars, summWrapper.absInterfaceVars);
+                summWrapper.UpdateSummary(summary);
                 return true;
             }
 
             public VCExpr GetSummary(StratifiedCallSite scs, int recDepth) {
 
-                String methodName = scs.callSite.calleeName;
-                SummaryWrapper summWrapper = summaries[methodName];
+                SummaryWrapper summWrapper = summaries[Key(scs, recDepth)];
 
                 Dictionary<VCExprVar, VCExpr> substMapping = new Dictionary<VCExprVar, VCExpr>();
                 for (int i=0; i<scs.interfaceExprs.Count; i++) {
@@ -1568,7 +1573,7 @@ namespace CoreLib
                 }
                 VCExprSubstitution subst = new VCExprSubstitution(substMapping, new Dictionary<TypeVariable, Microsoft.Boogie.Type>());
                 SubstitutingVCExprVisitor substVisitor = new SubstitutingVCExprVisitor(prover.VCExprGen);
-                var concretizedSummary = prover.VCExprGen.Implies(scs.callSiteExpr, substVisitor.Mutate(summWrapper.GetSummary(recDepth), subst));
+                var concretizedSummary = prover.VCExprGen.Implies(scs.callSiteExpr, substVisitor.Mutate(summWrapper.summary, subst));
 
                 return concretizedSummary;
             }
@@ -1584,93 +1589,75 @@ namespace CoreLib
 
             private class SummaryWrapper {
                 private static int absVarCount = 0;
-                private string methodName;
+                public string methodName {get; set;}
+                public List<string> absVarNames {get; set;}
                 public List<VCExprVar> absInterfaceVars;
-                private List<VCExpr> summaries;
+                public VCExpr summary;
+                public string sharedSummary {
+                    get {
+                        if (sharedSummary == null) {
+                            sharedSummary = summaryManager.prover.VCExprToString(summary);
+                        }
+                        return sharedSummary;
+                    }
+                    set {}
+                }
                 private SummaryManager summaryManager;
-                public int useCount { get; private set;}
-                public int updateCount { get; private set;}
-                public int size { get {return this.summaries.Select(x => SizeComputingVisitor.ComputeSize(x)).ToList().Max();}}
+                public int useCount {get; private set;}
+                public int updateCount {get; private set;}
+                public int vcSize {get; private set;}
+                public int summarySize {get; private set;}
                 public bool isShared {get; private set;}
-
-                public SummaryWrapper(string methodName, SummaryManager summaryManager) {
+                
+                public SummaryWrapper(string methodName, SummaryManager summaryManager, StratifiedVC vc) {
                     this.methodName = methodName;
-                    this.useCount = 0;
-                    this.updateCount = -1; //because we want the first update to be recorded as 0
                     this.summaryManager = summaryManager;
+                    this.useCount = 0;
+                    this.updateCount = 0;
                     this.isShared = false;
+                    this.vcSize = SizeComputingVisitor.ComputeSize(vc.vcexpr);
+                    this.summarySize = 0;
+                    CreateAbsVars(vc.interfaceExprVars);
+                }
 
-                    this.summaries = new List<VCExpr>();
-                    for (int i=0; i<=CommandLineOptions.Clo.RecursionBound; i++) {
-                        summaries.Add(VCExpressionGenerator.True);
+                public void CreateAbsVars(List<VCExprVar> exprVars) {
+                    absInterfaceVars = new List<VCExprVar>();
+                    
+                    //For shared summaries absVarNames will already be present
+                    if (!isShared) {
+                        absVarNames = new List<string>();
+                        for (int i=0; i<exprVars.Count; i++) {
+                            absVarNames.Add("ABS@" + summaryManager.getInstanceId() + "@" + absVarCount++);
+                        }
+                    }
+
+                    for (int i=0; i<exprVars.Count; i++) {
+                        string uniqueAbsVarName = absVarNames[i];
+                        absInterfaceVars.Add(summaryManager.prover.VCExprGen.Variable(uniqueAbsVarName, exprVars[i].Type));
                     }
                 }
 
-                private string getUniqueName() {
-                    if (summaryManager.isConnected) {
-                        return "ABS@" + summaryManager.comm.GetId() + "@" + absVarCount++;
+                public void SetSummaryManager(SummaryManager manager) {
+                    this.summaryManager = manager;
+                }
+
+                public bool UpdateSummary(VCExpr expr) {
+                    if (expr == VCExpressionGenerator.True) return false;
+
+                    if (summary == null) {
+                        summary = expr;
                     }
                     else {
-                        return "ABS@" + absVarCount++;
-                    }
-                }
-
-                public void CreateAbsInterfaceVars(int count) {
-                    absInterfaceVars = new List<VCExprVar>();
-                    for (int i=0; i<count; i++) {
-                        //The type of var in this context does not matter as this variable is only a placeholder
-                        //When the summary gets concretized these variables are replaced with 
-                        //variables containing the correct type.
-                        //In order to avoid the overhead of dealing with actual types, it has been hardcoded for now.
-                        absInterfaceVars.Add(summaryManager.prover.VCExprGen.Variable(getUniqueName(), Microsoft.Boogie.Type.Bool));
-                    }
-                }
-
-                private void CreateAbsInterfaceVars(List<string> absVarNames) {
-                    absInterfaceVars = new List<VCExprVar>();
-                    foreach (var absVarName in absVarNames) {
-                        //The type of var in this context does not matter as this variable is only a placeholder
-                        //When the summary gets concretized these variables are replaced with 
-                        //variables containing the correct type.
-                        //In order to avoid the overhead of dealing with actual types, it has been hardcoded for now.
-                        absInterfaceVars.Add(summaryManager.prover.VCExprGen.Variable(absVarName, Microsoft.Boogie.Type.Bool));
-                    }
-                }
-
-                public void UpdateSummary(VCExpr summary, int recDepth) {
-                    summaries[recDepth] = summaryManager.prover.VCExprGen.And(summaries[recDepth], summary);
-                    this.updateCount++;
-                }
-
-                public VCExpr GetSummary(int recDepth) {
-                    this.useCount++;
-                    return this.summaries[recDepth];
-                }
-
-                public SummarySharable Wrap() {
-                    SummarySharable serializable = new SummarySharable();
-                    serializable.methodName = methodName;
-                    serializable.interfaceVarNames = absInterfaceVars.Select(x => x.Name).ToList();
-                    summaries.ForEach(x => serializable.summaries.Add(summaryManager.prover.VCExprToString(x)));
-
-                    Console.WriteLine("Sharing Summary: {0} : {1}", methodName, serializable.summaries);
-                    return serializable;
-                }
-
-                public static SummaryWrapper UnWrap(SummarySharable sharedSummary, SummaryManager summaryManager) {
-                    SummaryWrapper newSummary = new SummaryWrapper(sharedSummary.methodName, summaryManager);
-                    newSummary.CreateAbsInterfaceVars(sharedSummary.interfaceVarNames);
-
-                    Dictionary<string, VCExpr> bound = new Dictionary<String, VCExpr>();
-                    newSummary.absInterfaceVars.ForEach(x => bound.Add(x.Name, x));
-
-                    for (int i=0; i<sharedSummary.summaries.Count(); i++){
-                        VCExpr parsedSummary = summaryManager.prover.StringToVCExpr(sharedSummary.summaries[i], bound);
-                        newSummary.UpdateSummary(parsedSummary, i);
+                        summary = summaryManager.prover.VCExprGen.And(summary, expr);
+                        updateCount++;
                     }
 
-                    newSummary.isShared = true;
-                    return newSummary;
+                    return true;
+                }
+
+                public VCExpr GetSummary() {
+                    useCount++;
+                    return summary;
                 }
 
                 public override string ToString(){
@@ -1679,10 +1666,10 @@ namespace CoreLib
                     row.Add(methodName);
                     
                     //Summary Type
-                    if (this.summaries[1] == VCExpressionGenerator.True) {
+                    if (summary == VCExpressionGenerator.True) {
                         row.Add("True");
                     }
-                    else if (this.summaries[1] == VCExpressionGenerator.False) {
+                    else if (summary == VCExpressionGenerator.False) {
                         row.Add("False");
                     }
                     else {
@@ -1690,23 +1677,10 @@ namespace CoreLib
                     }
 
                     row.Add(this.isShared.ToString());
-                    row.Add(this.size.ToString());
                     row.Add(this.useCount.ToString());
                     row.Add(this.updateCount.ToString());
 
                     return String.Join(",", row);
-                }
-            }
-
-            [Serializable]
-            public class SummarySharable {
-                public string methodName { get; set; }
-                public List<string> interfaceVarNames { get; set; }
-                public List<string> summaries { get; set; }
-
-                public SummarySharable() {
-                    interfaceVarNames = new List<string>();
-                    summaries = new List<string>();
                 }
             }
         }
@@ -1851,7 +1825,7 @@ namespace CoreLib
                     outcome = CheckVC(reporter);
                     toExpand = reporter.callSitesToExpand;
                     
-                    Console.WriteLine("Info: OQ Outcome: {0} ({1})", outcome, (DateTime.Now - qStartTime).TotalMilliseconds);
+                    Console.WriteLine("OQ Outcome: {0} ({1})", outcome, (DateTime.Now - qStartTime).TotalMilliseconds);
                 }
 
                 if (outcome == Outcome.Errors)
@@ -1870,6 +1844,7 @@ namespace CoreLib
                     lastBlockedCallSites.Clear();
                     nextOpenCallSites.Clear();
                     nextSummCallSites.Clear();
+
                     foreach (StratifiedCallSite scs in openCallSites)
                     {
                         //Inline Callsite
@@ -1894,7 +1869,7 @@ namespace CoreLib
                     foreach (var scs in nextOpenCallSites) 
                     {
                         if (HasExceededRecursionDepth(scs, recBound)) continue;
-                        if (summManager.Contains(scs)) 
+                        if (summManager.Contains(scs, RecursionDepth(scs))) 
                         {
                             nextSummCallSites.Add(scs);
                             var summary = summManager.GetSummary(scs, RecursionDepth(scs));
@@ -1922,8 +1897,6 @@ namespace CoreLib
                     }
                     else
                     {
-                        Console.WriteLine("Info: Getting Interpolants");
-
                         HashSet<StratifiedCallSite> rootNodes = new HashSet<StratifiedCallSite>();
                         rootNodes.UnionWith(blockedCallSites);
                         rootNodes.UnionWith(inlinedCallSites);
@@ -1983,7 +1956,7 @@ namespace CoreLib
                         foreach (var scs in nextOpenCallSites) 
                         {
                             if (HasExceededRecursionDepth(scs, recBound)) continue;
-                            if (summManager.Contains(scs)) 
+                            if (summManager.Contains(scs, RecursionDepth(scs))) 
                             {
                                 nextSummCallSites.Add(scs);
                                 var summary = summManager.GetSummary(scs, RecursionDepth(scs));
@@ -2003,6 +1976,23 @@ namespace CoreLib
                     iterCount = (iterCount + 1) % CorralConfig.RefreshRate;
                 }
             }
+
+            //This is reqired when Corral is running with /si flag disabled.
+            //Otherwise corral is not able to form the output trace correctly.
+            if (outcome == Outcome.Errors) {
+                // underapproximate query
+                prover.LogComment("Running underapprox query - start");
+                Push();
+                foreach (StratifiedCallSite cs in openCallSites)
+                {
+                    prover.LogComment("Blocking: " + GetPersistentID(cs));
+                    prover.Assert(prover.VCExprGen.Not(cs.callSiteExpr), true);
+                }
+                reporter.reportTrace = main;
+                outcome = CheckVC(reporter);
+                Pop();
+                prover.LogComment("Running underapprox query - end - Outcome: " + outcome);
+            }   
 
             while (partitionStack.Count > 0) 
             {
