@@ -1756,7 +1756,8 @@ namespace CoreLib
             HashSet<StratifiedCallSite> nextOpenCallSites = new HashSet<StratifiedCallSite>(openCallSites);
             HashSet<StratifiedCallSite> nextSummCallSites = new HashSet<StratifiedCallSite>();
 
-            var boundHit = false;
+            bool loop = true;
+            bool boundHit = false;
             int iterCount = 0;
             DateTime qStartTime;
             bool bootStrapMode = false;
@@ -1774,7 +1775,7 @@ namespace CoreLib
             Push(); //inlining of sudo-main
             Push(); //summaries of sudo-main
             partitionStack.Push(TiState.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites, nextSummCallSites));
-            while (true)
+            while (loop)
             {
                 // Check timeout
                 if (CommandLineOptions.Clo.ProverKillTime != -1)
@@ -1825,7 +1826,7 @@ namespace CoreLib
                     outcome = CheckVC(reporter);
                     toExpand = reporter.callSitesToExpand;
                     
-                    Console.WriteLine("OQ Outcome: {0} ({1})", outcome, (DateTime.Now - qStartTime).TotalMilliseconds);
+                    Console.WriteLine("OQ Outcome: {0} :{1}", outcome, (DateTime.Now - qStartTime).TotalSeconds);
                 }
 
                 if (outcome == Outcome.Errors)
@@ -1924,6 +1925,16 @@ namespace CoreLib
                         {
                             System.Diagnostics.Contracts.Contract.Assert(summaries[i] != null);
                             StratifiedCallSite leafNode = leafNodes[i];
+
+                            if (parent.ContainsKey(leafNode) && leafNode.callSite.calleeName != parent[leafNode].callSite.calleeName && RecursionDepth(leafNode) > 1) {
+                                Console.WriteLine("Error: Indirect recursion is currently not supported.");
+                                Console.WriteLine("Return status: NotSupported");
+                                Console.WriteLine(GetPersistentID(leafNode));
+                                outcome = Outcome.Inconclusive;
+                                loop = false;
+                                break;
+                            }
+
                             if (summManager.RecordSummary(leafNode, attachedVC[leafNode], summaries[i], RecursionDepth(leafNode)))
                                 summariesToShare.Add(leafNode.callSite.calleeName);
                             
