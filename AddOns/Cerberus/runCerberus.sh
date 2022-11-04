@@ -1,0 +1,1 @@
+bin/Debug/net6.0/Cerberus -master $1
