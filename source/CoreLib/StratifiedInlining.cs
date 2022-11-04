@@ -1560,10 +1560,25 @@ namespace CoreLib
                 if (summary == VCExpressionGenerator.True) return false;
 
                 string key = Key(cs, recDepth);
-                if (!summaries.ContainsKey(key)) summaries[key] = new SummaryWrapper(key, this, vc);
+                if (!summaries.ContainsKey(key)) {
+                    summaries[key] = new SummaryWrapper(key, this, vc);
+                }
+
                 SummaryWrapper summWrapper = summaries[key];
                 summary = AbstractifySummary(summary, (VCExprVar) cs.callSiteExpr, vc.interfaceExprVars, summWrapper.absInterfaceVars);
-                return summWrapper.UpdateSummary(summary);
+                summWrapper.UpdateSummary(summary);
+
+                if (!TiStats.SummaryLargerThanVC) {
+                    TiStats.SummaryLargerThanVC = SizeComputingVisitor.ComputeSize(summary) > SizeComputingVisitor.ComputeSize(vc.vcexpr);
+
+                    if (TiStats.SummaryLargerThanVC) {
+                        Console.WriteLine("SummaryLargerThanVC: True");
+                        Console.WriteLine("SummaryLargerThanVC: MethodName: {0}", key);
+                    }
+                }
+                
+
+                return true;
             }
 
             public (VCExpr, int) GetSummary(StratifiedCallSite scs, int recDepth) {
@@ -1582,12 +1597,13 @@ namespace CoreLib
             }
 
             public void LogInfo() {
-                Console.WriteLine("Summary Info");
-                Console.WriteLine("Method Name,Type,Is Shared,Size,Use Count,Update Count");
+                Console.WriteLine("\n----------------------Summary Info-----------------------");
+                Console.WriteLine("Method Name,Type,Is Shared,Summ Size,VC Size,Use Count,Update Count");
                 foreach (KeyValuePair<string, SummaryWrapper> entry in summaries)
                 {
                     Console.WriteLine(entry.Value.ToString());
                 }
+                Console.WriteLine("----------------------Summary Info-----------------------\n");
             }
 
             private class SummaryWrapper {
@@ -1608,7 +1624,6 @@ namespace CoreLib
                 private SummaryManager summaryManager;
                 public int useCount {get; private set;}
                 public int vcSize {get; private set;}
-                public int summarySize {get; private set;}
                 public bool isShared {get; private set;}
 
                 public int version {get; private set;}
@@ -1621,7 +1636,6 @@ namespace CoreLib
                     this.useCount = 0;
                     this.isShared = false;
                     this.vcSize = SizeComputingVisitor.ComputeSize(vc.vcexpr);
-                    this.summarySize = 0;
                     this.version = 0;
                     this.lastVersionUsed = 0;
                     CreateAbsVars(vc.interfaceExprVars);
@@ -1648,22 +1662,22 @@ namespace CoreLib
                     this.summaryManager = manager;
                 }
 
-                public bool UpdateSummary(VCExpr expr) {
-                    if (expr == VCExpressionGenerator.True) return false;
-
+                public VCExpr UpdateSummary(VCExpr expr) {
                     if (summary == null) {
                         summary = expr;
-                        return false;
                     }
-                    else {
+                    else if (expr != VCExpressionGenerator.True) {
                         summary = summaryManager.prover.VCExprGen.And(summary, expr);
                         version++;
-                        return true;
+                        TiStats.SummaryRefined++;
                     }
+
+                    return summary;
                 }
 
                 public VCExpr GetSummary() {
                     useCount++;
+                    TiStats.SummaryUsed++;
                     lastVersionUsed = version;
                     return summary;
                 }
@@ -1683,8 +1697,10 @@ namespace CoreLib
                     else {
                         row.Add("<Complex>");
                     }
-
                     row.Add(this.isShared.ToString());
+
+                    row.Add(SizeComputingVisitor.ComputeSize(summary).ToString());
+                    row.Add(vcSize.ToString());
                     row.Add(this.useCount.ToString());
                     row.Add(this.version.ToString());
 
@@ -1748,6 +1764,15 @@ namespace CoreLib
         //     return expression;
         // }
 
+        public class TiStats {
+            public static int SummaryRefined = 0;
+            public static int SummaryUsed = 0;
+            public static int SummarizedMethodInlined = 0;
+            public static bool SummaryLargerThanVC = false;
+        }
+
+        //TODO: Temorary: Move inside TraceInlining method later
+        SummaryManager summManager;
         public Outcome TraceInlining(HashSet<StratifiedCallSite> openCallSites, StratifiedInliningErrorReporter reporter, bool main, int recBound)
         {
             Console.WriteLine("Trace Inlining - Start");
@@ -1779,7 +1804,7 @@ namespace CoreLib
                 bootStrapMode = bootstrapCallSites.Count > 0;
             }
 
-            SummaryManager summManager = new SummaryManager(prover);
+            summManager = new SummaryManager(prover);
             if (CorralConfig.clientId != -1) summManager.InitCommunicator(CorralConfig.serverUrl, CorralConfig.clientId);
         
             Push(); //inlining of sudo-main
@@ -1876,7 +1901,7 @@ namespace CoreLib
                     nextOpenCallSites.Clear();
                     nextSummCallSites.Clear();
 
-                    List<StratifiedCallSite> nonSummaryCallsites = toExpand.Where(x => !summManager.Contains(x, RecursionDepth(x))).ToList();
+                    List<StratifiedCallSite> nonSummaryCallsites = toExpand.Where(x => !summarizedCallSites.Contains(x)).ToList();
                     List<StratifiedCallSite> toInline = nonSummaryCallsites.Count > 0 ? nonSummaryCallsites : toExpand;
                     foreach (StratifiedCallSite scs in openCallSites)
                     {
@@ -1977,7 +2002,7 @@ namespace CoreLib
                         openCallSites.ExceptWith(nextOpenCallSites);
                         blockedCallSites.ExceptWith(lastBlockedCallSites);
                         inlinedCallSites.ExceptWith(lastInlinedCallSites);
-                        foreach (var key in nextSummCallSites.Keys) summarizedCallSites.Remove(key);
+                        summarizedCallSites.ExceptWith(nextSummCallSites.Keys);
                         foreach (var cs in lastInlinedCallSites) attachedVC.Remove(cs);
 
                         TiState topState = partitionStack.Pop();
@@ -2049,6 +2074,12 @@ namespace CoreLib
             if (summManager.isConnected) summManager.comm.ReportFinished(outcome.ToString());
 
             summManager.LogInfo();
+
+            Console.WriteLine("\n------------------------TiStats-----------------------------");
+            Console.WriteLine("SummaryUsed: {0}", TiStats.SummaryUsed);
+            Console.WriteLine("SummaryRefined: {0}", TiStats.SummaryRefined);
+            Console.WriteLine("SummaryMethodInlined: {0}", TiStats.SummarizedMethodInlined);
+            Console.WriteLine("------------------------TiStats-----------------------------\n");
 
             prover.LogComment("Trace Inlining - Ended");
             Console.WriteLine("Trace Inlining - Ended");
@@ -2677,6 +2708,9 @@ namespace CoreLib
 
         private StratifiedVC TraceExpand(StratifiedCallSite scs, string name)
         {
+            if (summManager.Contains(scs, RecursionDepth(scs))) {
+                TiStats.SummarizedMethodInlined++;
+            }
             Debug.Assert(name != null);
             StratifiedVC ret = null;
 
