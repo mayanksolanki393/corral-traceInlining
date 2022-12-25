@@ -459,7 +459,7 @@ namespace cba
                 var timeouttask = new System.Threading.Tasks.Task(() =>
                     {
                         System.Threading.Thread.Sleep(timeout * 1000);
-                        Console.WriteLine("Corral timed out");
+                        Console.WriteLine("Return status: Timeout");
                         Process.GetCurrentProcess().Kill();
                     });
                 timeouttask.Start();
@@ -481,6 +481,17 @@ namespace cba
             {
                 var split = flag.Split(sep);
                 cba.Util.CorralConfig.clientId = Int32.Parse(split[1]);
+            }
+            else if (flag.StartsWith("/numberOfStates:"))
+            {
+                var split = flag.Split(sep);
+                cba.Util.CorralConfig.numberOfStates = Int32.Parse(split[1]);
+                cba.Util.CorralConfig.trustOffset = Convert.ToInt32(Math.Floor((double) (cba.Util.CorralConfig.numberOfStates / 2)));
+            }
+            else if (flag.StartsWith("/initialState:"))
+            {
+                var split = flag.Split(sep);
+                cba.Util.CorralConfig.initialState = Int32.Parse(split[1]);
             }
             else if (flag.StartsWith("/randomInlining:"))
             {

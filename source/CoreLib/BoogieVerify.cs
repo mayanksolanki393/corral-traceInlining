@@ -22,7 +22,10 @@ namespace cba.Util
         public static string inputFile = "";
         public static int clientId = -1;
         public static string serverUrl = "http://localhost:5000/";
-        public static int RefreshRate = 5;
+        public static int refreshRate = 5;
+        public static int numberOfStates = 4;
+        public static int trustOffset = 2;
+        public static int initialState = -1;
     }
     public static class BoogieVerify
     {
