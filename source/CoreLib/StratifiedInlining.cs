@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
@@ -1457,11 +1457,13 @@ namespace CoreLib
             private ProverInterface prover;
             public Communicator comm;
             public bool isConnected {get{return comm != null;}}
+            private StratifiedInlining si;
 
-            public SummaryManager(ProverInterface prover) {
+            public SummaryManager(ProverInterface prover, StratifiedInlining si) {
                 this.summaries = new Dictionary<String, SummaryWrapper>();
                 this.prover = prover;
                 this.comm = null;
+                this.si = si;
             }
 
             public int getInstanceId() {
@@ -1495,7 +1497,7 @@ namespace CoreLib
                 catch (Exception ex) {
                     Console.WriteLine("Connection Failed: Server not started");
                     this.comm = null;
-                    throw ex;
+                    Environment.Exit(1);
                 }
                 
             }
@@ -1528,19 +1530,19 @@ namespace CoreLib
                 }
             }
 
-            public Boolean Contains(StratifiedCallSite csc, int recDepth) {
-                return this.summaries.ContainsKey(Key(csc, recDepth));
+            public Boolean Contains(StratifiedCallSite csc) {
+                return this.summaries.ContainsKey(Key(csc, this.si.GetHash(csc)));
             }
 
-            public Boolean summaryHasChanged(StratifiedCallSite csc, int recDepth) {
-                return this.summaries[(Key(csc, recDepth))].isUpdated;
+            public Boolean summaryHasChanged(StratifiedCallSite csc) {
+                return this.summaries[(Key(csc, this.si.GetHash(csc)))].isUpdated;
             }
 
             private string Key(StratifiedCallSite scs, int recDepth) {
-                return scs.callSite.calleeName + "@depth_" + recDepth;
+                return scs.callSite.calleeName + "@" + recDepth;
             }
 
-            private VCExpr AbstractifySummary(VCExpr summary, VCExprVar controlVar, List<VCExprVar> concreteInterfaceVars, List<VCExprVar> absInterfaceVars) {
+            public VCExpr AbstractifySummary(VCExpr summary, VCExprVar controlVar, List<VCExprVar> concreteInterfaceVars, List<VCExprVar> absInterfaceVars) {
 
                 //Replace actual arguments with formal arguments
                 Dictionary<VCExprVar, VCExpr> substMapping = new Dictionary<VCExprVar, VCExpr>();
@@ -1556,9 +1558,9 @@ namespace CoreLib
                 return abstractedSummary;
             }
 
-            public bool RecordSummary(StratifiedCallSite cs, StratifiedVC vc, VCExpr summary, int recDepth) {
+            public bool RecordSummary(StratifiedCallSite cs, StratifiedVC vc, VCExpr summary) {
                 //Console.WriteLine("Recording Summary For: {0}", cs.callSite.calleeName);
-                string key = Key(cs, recDepth);
+                string key = Key(cs, si.GetHash(cs));
                 if (!summaries.ContainsKey(key)) {
                     summaries[key] = new SummaryWrapper(key, this, vc);
                 }
@@ -1579,9 +1581,9 @@ namespace CoreLib
                 return true;
             }
 
-            public (VCExpr, int) GetSummary(StratifiedCallSite scs, int recDepth) {
+            public (VCExpr, int) GetSummary(StratifiedCallSite scs) {
 
-                SummaryWrapper summWrapper = summaries[Key(scs, recDepth)];
+                SummaryWrapper summWrapper = summaries[Key(scs, si.GetHash(scs))];
 
                 Dictionary<VCExprVar, VCExpr> substMapping = new Dictionary<VCExprVar, VCExpr>();
                 for (int i=0; i<scs.interfaceExprs.Count; i++) {
@@ -1594,13 +1596,17 @@ namespace CoreLib
                 return (concretizedSummary, summWrapper.version);
             }
 
-            public int TrustScore(StratifiedCallSite scs, int recDepth) {
-                return summaries[Key(scs, recDepth)].trust;
+            public int TrustScore(StratifiedCallSite scs) {
+                return summaries[Key(scs, si.GetHash(scs))].trust;
+            }
+
+            public int SummaryVersion(StratifiedCallSite scs) {
+                return summaries[Key(scs, si.GetHash(scs))].version;
             }
 
             public void LogInfo() {
                 Console.WriteLine("\n----------------------Summary Info-----------------------");
-                Console.WriteLine("Method Name,Type,Is Shared,Summ Size,VC Size,Use Count,Update Count,Trust,Time Stamps");
+                Console.WriteLine("Method Name,Type,Is Shared,Summ Size,VC Size,Use Count,Version,LastUsedVersion,Trust,Time Stamps");
                 foreach (KeyValuePair<string, SummaryWrapper> entry in summaries)
                 {
                     Console.WriteLine(entry.Value.ToString());
@@ -1722,6 +1728,7 @@ namespace CoreLib
                     row.Add(vcSize.ToString());
                     row.Add(this.useCount.ToString());
                     row.Add(this.version.ToString());
+                    row.Add(this.lastVersionUsed.ToString());
                     row.Add(this.trust.ToString());
                     row.Add(String.Join(":", this.timeStamps));
 
@@ -1795,6 +1802,37 @@ namespace CoreLib
 
         //TODO: Temorary: Move inside TraceInlining method later
         SummaryManager summManager;
+
+        public Dictionary<StratifiedCallSite, List<string>> hashCodes = new Dictionary<StratifiedCallSite, List<string>>();
+
+        public int GetHash(StratifiedCallSite cs) {
+            List<string> strs = ComputeHash(cs, cs.callSite.calleeName, new HashSet<string>());
+            strs = new List<string>(strs);
+            strs.Reverse();
+            var toHash = String.Join("_", strs);
+            //Console.WriteLine("Computed Hash:{0}:{1}", cs.callSite.calleeName, toHash);
+            return toHash.GetHashCode();
+        }
+        
+        public List<string> ComputeHash(StratifiedCallSite cs, string methodName, HashSet<string> methodNames) {
+            int depth = RecursionDepth(cs);
+            List<string> strs = new List<string>{cs.callSite.calleeName+"@"+depth};
+            
+            if (depth > 1) {
+                methodNames.Add(cs.callSite.calleeName);
+            }
+            
+            if (hashCodes.ContainsKey(cs)) { 
+                strs = hashCodes[cs];
+            }
+            else if (parent.ContainsKey(cs) && (methodNames.Contains(parent[cs].callSite.calleeName) || depth > 1)) {
+                strs.AddRange(ComputeHash(parent[cs], methodName, methodNames));
+                hashCodes.Add(cs, strs);
+            }
+            
+            return strs;
+        }
+
         public Outcome TraceInlining(HashSet<StratifiedCallSite> openCallSites, StratifiedInliningErrorReporter reporter, bool main, int recBound)
         {
             Console.WriteLine("Trace Inlining - Start");
@@ -1811,9 +1849,7 @@ namespace CoreLib
             HashSet<StratifiedCallSite> lastBlockedCallSites = new HashSet<StratifiedCallSite>();
             HashSet<StratifiedCallSite> nextOpenCallSites = new HashSet<StratifiedCallSite>(openCallSites);
             Dictionary<StratifiedCallSite, int> nextSummCallSites = new Dictionary<StratifiedCallSite, int>(); //summarized callsite and the version used
-            //HashSet<string> summariesUpdated = new HashSet<string>();
 
-            bool running = true;
             bool boundHit = false;
             int iterCount = 0;
             DateTime qStartTime;
@@ -1821,10 +1857,6 @@ namespace CoreLib
             if (CorralConfig.initialState == -1) {
                 CorralConfig.initialState = CorralConfig.trustOffset;
             }
-
-            // Console.WriteLine("Number of States: {0}", CorralConfig.numberOfStates);
-            // Console.WriteLine("Intial States: {0}", CorralConfig.initialState);
-            // Console.WriteLine("Number trust offset: {0}", CorralConfig.trustOffset);
 
             bool bootStrapMode = false;
             HashSet<String> bootstrapCallSites = new HashSet<String>();
@@ -1835,30 +1867,14 @@ namespace CoreLib
                 bootStrapMode = bootstrapCallSites.Count > 0;
             }
 
-            summManager = new SummaryManager(prover);
+            summManager = new SummaryManager(prover, this);
             if (CorralConfig.clientId != -1) summManager.InitCommunicator(CorralConfig.serverUrl, CorralConfig.clientId);
         
             Push(); //inlining of sudo-main
             Push(); //summaries of sudo-main
             partitionStack.Push(TiState.SaveState(lastInlinedCallSites, lastBlockedCallSites, nextOpenCallSites, nextSummCallSites));
-            while (running)
+            while (true)
             {
-                // Check timeout
-                if (CommandLineOptions.Clo.ProverKillTime != -1)
-                {
-                    if ((DateTime.UtcNow - startTime).TotalSeconds > CommandLineOptions.Clo.ProverKillTime)
-                    {
-                        return Outcome.TimedOut;
-                    }
-                }
-
-                // Bound on max procs inlined
-                if (BoogieVerify.options.maxInlinedBound != 0 &&
-                    stats.numInlined > BoogieVerify.options.maxInlinedBound)
-                {
-                    return Outcome.ReachedBound;
-                }
-
                 // overapproximate query
                 prover.LogComment("Running overapprox query - start");
                 Push();
@@ -1912,7 +1928,7 @@ namespace CoreLib
                     nextOpenCallSites.Clear();
                     nextSummCallSites.Clear();
 
-                    List<StratifiedCallSite> callsToDelay = toExpand.Where(x => summarizedCallSites.Contains(x) && summManager.TrustScore(x, RecursionDepth(x)) >= CorralConfig.trustOffset).ToList();
+                    List<StratifiedCallSite> callsToDelay = toExpand.Where(x => summarizedCallSites.Contains(x) && summManager.TrustScore(x) >= CorralConfig.trustOffset).ToList();
                     List<StratifiedCallSite> toInline = toExpand.Where(x => !callsToDelay.Contains(x)).ToList();
                     toInline = toInline.Count > 0 ? toInline : toExpand;
                     foreach (StratifiedCallSite scs in openCallSites)
@@ -1939,9 +1955,9 @@ namespace CoreLib
                     foreach (var scs in nextOpenCallSites) 
                     {
                         if (HasExceededRecursionDepth(scs, recBound)) continue;
-                        if (summManager.Contains(scs, RecursionDepth(scs))) 
+                        if (summManager.Contains(scs)) 
                         {
-                            var (summary, version) = summManager.GetSummary(scs, RecursionDepth(scs));
+                            var (summary, version) = summManager.GetSummary(scs);
                             nextSummCallSites.Add(scs, version);
                             prover.LogComment("Asserting summary for " + GetPersistentID(scs));
                             prover.AssertNamed(summary, true, "summary_" + scs.callSiteExpr + "@" + version);
@@ -1991,17 +2007,8 @@ namespace CoreLib
                             System.Diagnostics.Contracts.Contract.Assert(summaries[i] != null);
                             StratifiedCallSite leafNode = leafNodes[i];
 
-                            if (parent.ContainsKey(leafNode) && leafNode.callSite.calleeName != parent[leafNode].callSite.calleeName && RecursionDepth(leafNode) > 1) {
-                                Console.WriteLine("Error: Indirect recursion is currently not supported.");
-                                Console.WriteLine("Return status: NotSupported");
-                                Console.WriteLine(GetPersistentID(leafNode));
-                                outcome = Outcome.Inconclusive;
-                                running = false;
-                                break;
-                            }
-
-                            if (summManager.RecordSummary(leafNode, attachedVC[leafNode], summaries[i], RecursionDepth(leafNode))) {
-                                //summariesUpdated.Add(leafNode.callSite.calleeName);
+                            if (summManager.RecordSummary(leafNode, attachedVC[leafNode], summaries[i])) {
+                                summariesToShare.Add(leafNode.callSite.calleeName);
                             }
                         }
                         if (summManager.isConnected) summManager.ShareSummaries(summariesToShare);
@@ -2030,14 +2037,18 @@ namespace CoreLib
                         Push(); //push-new second last summary frame
 
                         summarizedCallSites.ExceptWith(nextSummCallSites.Keys);
-                        nextSummCallSites.Clear();
+                        var popedNextSummCallSites = nextSummCallSites;
+                        nextSummCallSites = new Dictionary<StratifiedCallSite, int>();
                         foreach (var scs in openCallSites) 
                         {
                             if (HasExceededRecursionDepth(scs, recBound)) continue;
-                            if (summManager.Contains(scs, RecursionDepth(scs)) &&
-                                (!summarizedCallSites.Contains(scs) || summManager.summaryHasChanged(scs, RecursionDepth(scs)))) 
+                            //if (a callsite can be summaraized or the summary for the callsite has been updated) 
+                            if (summManager.Contains(scs) &&
+                                (!summarizedCallSites.Contains(scs) || 
+                                 summManager.SummaryVersion(scs) > partitionStack.Where(par => par.nextSummarizedCallSites.ContainsKey(scs)).First().nextSummarizedCallSites[scs]
+                                )) 
                             {
-                                var (summary, version) = summManager.GetSummary(scs, RecursionDepth(scs));
+                                var (summary, version) = summManager.GetSummary(scs);
                                 nextSummCallSites.Add(scs, version);
                                 prover.LogComment("Asserting summary for " + GetPersistentID(scs));
                                 prover.AssertNamed(summary, true, "summary_" + scs.callSiteExpr + "@" + version);
@@ -2075,6 +2086,8 @@ namespace CoreLib
                 prover.LogComment("Running underapprox query - end - Outcome: " + outcome);
             }   
 
+            // Clear out the prover
+            // Required when same input file contains multiple implemenation to be verified
             while (partitionStack.Count > 0) 
             {
                 prover.LogComment("pstack-pop");
@@ -2083,6 +2096,9 @@ namespace CoreLib
                 Pop(); //for inlining-frame
             }
 
+            // TODO: This will not work correctly if the same input file contains
+            // multiple implementations to be verified.
+            // This should be moved to the point were prover finally finishes
             if (summManager.isConnected) summManager.comm.ReportFinished(outcome.ToString());
 
             summManager.LogInfo();
@@ -2720,7 +2736,8 @@ namespace CoreLib
 
         private StratifiedVC TraceExpand(StratifiedCallSite scs, string name)
         {
-            if (summManager.Contains(scs, RecursionDepth(scs))) {
+            Console.WriteLine("\tInlining: {0}", GetPersistentID(scs));
+            if (summManager.Contains(scs)) {
                 TiStats.SummarizedMethodInlined++;
             }
             Debug.Assert(name != null);
