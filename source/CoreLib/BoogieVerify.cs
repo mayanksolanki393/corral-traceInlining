@@ -15,9 +15,11 @@ namespace cba.Util
     public static class CorralConfig
     {
         public static bool underWidenSI = false;
-        public static bool traceInlining = false;
+
         public static bool randomInlining = false;
         public static int randomInliningDepth = 5;
+
+        public static bool traceInlining = false;
         public static string bootstrapFile = "";
         public static string inputFile = "";
         public static int clientId = -1;
@@ -26,6 +28,7 @@ namespace cba.Util
         public static int numberOfStates = 4;
         public static int trustOffset = 2;
         public static int initialState = -1;
+        public static bool delayInlining = true;
     }
     public static class BoogieVerify
     {

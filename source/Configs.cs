@@ -493,6 +493,11 @@ namespace cba
                 var split = flag.Split(sep);
                 cba.Util.CorralConfig.initialState = Int32.Parse(split[1]);
             }
+            else if (flag.StartsWith("/delayInlining:"))
+            {
+                var split = flag.Split(sep);
+                cba.Util.CorralConfig.delayInlining = Boolean.Parse(split[1]);
+            }
             else if (flag.StartsWith("/randomInlining:"))
             {
                 var split = flag.Split(sep);

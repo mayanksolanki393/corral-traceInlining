@@ -23,7 +23,9 @@ namespace MessagePassing {
 
         public override void Stop() {
             _httpListener.Stop();
-            Console.WriteLine("Status: {0}", finalResult);
+            Console.WriteLine("\n--Output--");
+            foreach(var key in finalResult.Keys) 
+                Console.WriteLine("{0}: {1}", key, finalResult[key]);
         }
 
         void ResponseThread(HttpListenerRequest request, HttpListenerResponse response) {

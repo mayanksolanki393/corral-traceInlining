@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace MessagePassing {
 
     [Serializable]
@@ -43,7 +45,7 @@ namespace MessagePassing {
 
     public abstract class Master : Node {
         protected List<Node> nodes;
-        protected object finalResult;
+        protected Dictionary<string, object> finalResult;
         private Dictionary<string, List<string>> summaries;
 
         public Master() : base(0) {
@@ -99,7 +101,7 @@ namespace MessagePassing {
                     }
                 }
                 case "unregister": {
-                    Console.WriteLine("sender Id: {0}", senderId);
+                    Console.WriteLine("Unregister Recieved: {0}", senderId);
                     Slave slave = (Slave) nodes[senderId];
                     slave.isRunning = false;
                     isDone = nodes.Where(x => x.isRunning).Count() <= 1;
@@ -122,7 +124,10 @@ namespace MessagePassing {
                     return new Message(Message.Type.LOGISTIC, "pong", true);
                 }
                 case "finished": {
-                    finalResult = body;
+                    Console.WriteLine("Finish Recieved: {0}", senderId);
+                    //Save Only FirstResult
+                    if (finalResult == null)
+                        finalResult = ((JsonElement)body).Deserialize<Dictionary<String, Object>>();
 
                     for (int i=0; i<nodes.Count; i++) {
                         nodes[i].finish();
