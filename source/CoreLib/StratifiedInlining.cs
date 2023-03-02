@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
@@ -2010,7 +2010,13 @@ namespace CoreLib
                             System.Diagnostics.Contracts.Contract.Assert(summaries[i] != null);
                             StratifiedCallSite leafNode = leafNodes[i];
 
-                            if (summManager.RecordSummary(leafNode, attachedVC[leafNode], summaries[i])) {
+                            var quantifierInSummary = QuantifierCheckVisitor.HasQuantifier(summaries[i]);
+                            if (quantifierInSummary) {
+                                Console.WriteLine("Quantifier in summary: True");
+                                Console.WriteLine("Info: Quantifier detected in computed interpolant. The results may be incorrect or the prover might crash.");
+                            }
+                            
+                            if (summManager.RecordSummary(leafNode, attachedVC[leafNode], summaries[i]) && !quantifierInSummary) {
                                 summariesToShare.Add(leafNode.callSite.calleeName + "@" + GetHash(leafNode));
                             }
                         }
