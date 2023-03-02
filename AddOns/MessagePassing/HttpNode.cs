@@ -4,10 +4,12 @@ using System.Text.Json;
 namespace MessagePassing {
     public class HttpMaster : Master {
         private HttpListener _httpListener;
+        public string serverUrl;
 
-        public HttpMaster(List<string> prefixes) {
+        public HttpMaster(string serverUrl) {
             _httpListener = new HttpListener();
-            foreach (var prefix in prefixes) _httpListener.Prefixes.Add(prefix);
+            this.serverUrl = serverUrl;
+            _httpListener.Prefixes.Add(this.serverUrl);
             _httpListener.Start();
         }
 
@@ -24,8 +26,15 @@ namespace MessagePassing {
         public override void Stop() {
             _httpListener.Stop();
             Console.WriteLine("\n--Output--");
-            foreach(var key in finalResult.Keys) 
-                Console.WriteLine("{0}: {1}", key, finalResult[key]);
+            if (finalResult != null) {
+                foreach(var key in finalResult.Keys) {
+                    Console.WriteLine("{0}: {1}", key, finalResult[key]);
+                }
+            }
+            else {
+                Console.WriteLine("Error: Something went wrong, final result not captured.");
+            }
+            
         }
 
         void ResponseThread(HttpListenerRequest request, HttpListenerResponse response) {
