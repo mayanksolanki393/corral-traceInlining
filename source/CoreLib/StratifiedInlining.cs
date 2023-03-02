@@ -2124,8 +2124,9 @@ namespace CoreLib
             bool isValid = false;
             List<string> inlinedCallSites = new List<string>();
 
+            var startBlockingAt = rnd.Next(CorralConfig.randomInliningDepth >> 2);
+
             while (depth < CorralConfig.randomInliningDepth) {
-                Console.WriteLine("depth:{0}", depth);
                 Push();
                 foreach (StratifiedCallSite cs in openCallSites) {
                     // Stop if we've reached the recursion bound or
@@ -2140,31 +2141,32 @@ namespace CoreLib
                 reporter.reportTrace = false;
                 reporter.callSitesToExpand = new List<StratifiedCallSite>();
                 Outcome outcome = CheckVC(reporter);
+                Console.WriteLine("OQ Outcome: {0}", outcome);
                 Pop();
                 
                 if (outcome == Outcome.Correct && isValid) break;
 
                 if (outcome != Outcome.Errors) {
                     Console.WriteLine("Status: Failed to generate tree");
-                    return outcome;
+                    break;
                 }
                 
-                if (depth >= 5 && depth <= 10 && 0 == rnd.Next(5)) {
+                if (depth >= startBlockingAt && 0 == rnd.Next(startBlockingAt)) {
                     int numTries = 10;
 
-                    while (numTries-- > 0) {
-                        Push();
-                    //Random Blocking
                         HashSet<StratifiedCallSite> callsInTrace = new HashSet<StratifiedCallSite>(reporter.callSitesToExpand);
                         callsInTrace.IntersectWith(openCallSites);
+
+                    //Random Blocking
+                    while (numTries-- > 0) {
+                        Push();
                         StratifiedCallSite randomCallSite = callsInTrace.ElementAt(rnd.Next(callsInTrace.Count));
-                    isValid = true;
-                    Console.WriteLine("blocking: {0} : {1}", depth, GetPersistentID(randomCallSite));
                     prover.Assert(randomCallSite.callSiteExpr, false);
 
                         Outcome outcome2 = CheckVC(reporter);
                         if (outcome2 == Outcome.Errors) {
                             openCallSites.Remove(randomCallSite); //Generated a new Trace
+                            isValid = true;
                             break;
                         }
                         else {
@@ -2173,18 +2175,12 @@ namespace CoreLib
                     }
                 }
                 else {
-                    HashSet<StratifiedCallSite> toRemove = new HashSet<StratifiedCallSite>();
-                    HashSet<StratifiedCallSite> nextOpenCallSites = new HashSet<StratifiedCallSite>();
                     foreach (var cs in reporter.callSitesToExpand) {
                             var svc = Expand(cs);
-                            
                             inlinedCallSites.Add(GetPersistentID(cs));
-                            System.Diagnostics.Contracts.Contract.Assert(svc != null);
-                            toRemove.Add(cs);
-                            nextOpenCallSites.UnionWith(svc.CallSites);
+                        openCallSites.Remove(cs);
+                        openCallSites.UnionWith(svc.CallSites);
                     }
-                    openCallSites.ExceptWith(toRemove);
-                    openCallSites.UnionWith(nextOpenCallSites);
                 }
                 if (openCallSites.Count == 0) {
                     break;
