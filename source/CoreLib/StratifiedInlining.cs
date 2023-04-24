@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
@@ -174,6 +174,7 @@ namespace CoreLib
         public Stats stats;
 
         /* call-site to VC map -- used for trace construction */
+        public Dictionary<StratifiedCallSite, int> vcSize;
         public Dictionary<StratifiedCallSite, StratifiedVC> attachedVC;
         public Dictionary<StratifiedVC, StratifiedCallSite> attachedVCInv;
         public Dictionary<StratifiedCallSite, StratifiedVC> summaryCache;
@@ -275,6 +276,7 @@ namespace CoreLib
                 RunInitialAnalyses(program);
             }
 
+            vcSize = new Dictionary<StratifiedCallSite, int>();
             attachedVC = new Dictionary<StratifiedCallSite, StratifiedVC>();
             summaryCache = new Dictionary<StratifiedCallSite, StratifiedVC>();
             attachedVCInv = new Dictionary<StratifiedVC, StratifiedCallSite>();
@@ -1893,7 +1895,7 @@ namespace CoreLib
                             StackDepth(cs) > CommandLineOptions.Clo.StackDepthBound))
                         {
                             prover.LogComment("Blocking: RecurBoundReached: "+ GetPersistentID(cs));
-                            Console.WriteLine("Blocking: RecurBoundReached: "+ GetPersistentID(cs));
+                            //Console.WriteLine("Blocking: RecurBoundReached: "+ GetPersistentID(cs));
                             prover.AssertNamed(cs.callSiteExpr, false, "assert_" + cs.callSiteExpr);
                             procsHitRecBound.Add(cs.callSite.calleeName);
                             boundHit = true;
@@ -1906,7 +1908,7 @@ namespace CoreLib
                     outcome = CheckVC(reporter);
                     toExpand = reporter.callSitesToExpand;
                     
-                    Console.WriteLine("OQ Outcome: {0}: {1}", outcome, (DateTime.Now - qStartTime).TotalSeconds);
+                    Console.WriteLine("OQ Outcome: {0}, time:{1}, vcsize:{2}", outcome, (DateTime.Now - qStartTime).TotalSeconds, stats.vcSize);
                 }
 
                 if (outcome == Outcome.Errors)
@@ -2031,7 +2033,10 @@ namespace CoreLib
                         blockedCallSites.ExceptWith(lastBlockedCallSites);
                         inlinedCallSites.ExceptWith(lastInlinedCallSites);
                         summarizedCallSites.ExceptWith(nextSummCallSites.Keys);
-                        foreach (var cs in lastInlinedCallSites) attachedVC.Remove(cs);
+                        foreach (var cs in lastInlinedCallSites) {
+                            stats.vcSize -= vcSize[cs];
+                            attachedVC.Remove(cs);
+                        }
 
                         TiState topState = partitionStack.Pop();
                         topState.ApplyState(ref lastInlinedCallSites, ref lastBlockedCallSites, ref nextOpenCallSites, ref nextSummCallSites);
@@ -2123,7 +2128,7 @@ namespace CoreLib
             Random rnd = new Random();
             bool isValid = false;
             List<string> inlinedCallSites = new List<string>();
-
+            
             var startBlockingAt = rnd.Next(CorralConfig.randomInliningDepth >> 2);
 
             while (depth < CorralConfig.randomInliningDepth) {
@@ -2154,14 +2159,14 @@ namespace CoreLib
                 if (depth >= startBlockingAt && 0 == rnd.Next(startBlockingAt)) {
                     int numTries = 10;
 
-                        HashSet<StratifiedCallSite> callsInTrace = new HashSet<StratifiedCallSite>(reporter.callSitesToExpand);
-                        callsInTrace.IntersectWith(openCallSites);
+                    HashSet<StratifiedCallSite> callsInTrace = new HashSet<StratifiedCallSite>(reporter.callSitesToExpand);
+                    callsInTrace.IntersectWith(openCallSites);
 
                     //Random Blocking
                     while (numTries-- > 0) {
                         Push();
                         StratifiedCallSite randomCallSite = callsInTrace.ElementAt(rnd.Next(callsInTrace.Count));
-                    prover.Assert(randomCallSite.callSiteExpr, false);
+                        prover.Assert(randomCallSite.callSiteExpr, false);
 
                         Outcome outcome2 = CheckVC(reporter);
                         if (outcome2 == Outcome.Errors) {
@@ -2176,8 +2181,8 @@ namespace CoreLib
                 }
                 else {
                     foreach (var cs in reporter.callSitesToExpand) {
-                            var svc = Expand(cs);
-                            inlinedCallSites.Add(GetPersistentID(cs));
+                        var svc = Expand(cs);
+                        inlinedCallSites.Add(GetPersistentID(cs));
                         openCallSites.Remove(cs);
                         openCallSites.UnionWith(svc.CallSites);
                     }
@@ -2688,6 +2693,7 @@ namespace CoreLib
 
         private StratifiedVC Expand(StratifiedCallSite scs, string name, bool DoSubst, bool dontMerge)
         {
+            //Console.WriteLine("\tInlining: {0}", GetPersistentID(scs));
             MacroSI.PRINT_DEBUG("    ~ extend callsite " + scs.callSite.calleeName);
             Debug.Assert(DoSubst || di.disabled);
             var candidate = dontMerge ? null : di.FindMergeCandidate(scs);
@@ -2747,7 +2753,7 @@ namespace CoreLib
 
         private StratifiedVC TraceExpand(StratifiedCallSite scs, string name)
         {
-            Console.WriteLine("\tInlining: {0}", GetPersistentID(scs));
+            //Console.WriteLine("\tInlining: {0}", GetPersistentID(scs));
             if (summManager.Contains(scs)) {
                 TiStats.SummarizedMethodInlined++;
             }
@@ -2768,11 +2774,13 @@ namespace CoreLib
 
             prover.LogComment("Inlining " + scs.callSite.calleeName + " from " + (parent.ContainsKey(scs) ? attachedVC[parent[scs]].info.impl.Name : "main"));
 
-            stats.vcSize += SizeComputingVisitor.ComputeSize(toassert);
+            int size = SizeComputingVisitor.ComputeSize(toassert);
+            stats.vcSize += size;
 
             prover.AssertNamed(toassert, true, name);
             prover.AssertNamed(equalityVC, true, "eq_"+name);
 
+            vcSize[scs] = size;
             attachedVC[scs] = svc;
             attachedVCInv[svc] = scs;
             ret = svc;
