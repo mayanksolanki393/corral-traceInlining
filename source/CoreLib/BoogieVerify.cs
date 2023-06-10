@@ -28,7 +28,7 @@ namespace cba.Util
         public static int numberOfStates = 4;
         public static int trustOffset = 2;
         public static int initialState = -1;
-        public static bool delayInlining = true;
+        public static bool delayInlining = false;
     }
     public static class BoogieVerify
     {
