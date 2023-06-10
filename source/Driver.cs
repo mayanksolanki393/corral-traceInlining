@@ -225,6 +225,9 @@ namespace cba
             if (cba.Util.CorralConfig.alphaInterleaving < 100)
                 CommandLineOptions.Clo.EnableUnSatCoreExtract = 1;*/
             CommandLineOptions.Clo.EnableUnSatCoreExtract = 0;
+            if (cba.Util.CorralConfig.underWidenSI) {
+                CommandLineOptions.Clo.EnableUnSatCoreExtract = 1;
+            }
             var startTime = DateTime.Now;
 
             ////////////////////////////////////
