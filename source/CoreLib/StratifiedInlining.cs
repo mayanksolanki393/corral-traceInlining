@@ -1574,10 +1574,10 @@ namespace CoreLib
                 if (!TiStats.SummaryLargerThanVC) {
                     TiStats.SummaryLargerThanVC = SizeComputingVisitor.ComputeSize(summary) > SizeComputingVisitor.ComputeSize(vc.vcexpr);
 
-                    if (TiStats.SummaryLargerThanVC) {
-                        Console.WriteLine("SummaryLargerThanVC: True");
-                        Console.WriteLine("SummaryLargerThanVC: MethodName: {0}", key);
-                    }
+                    // if (TiStats.SummaryLargerThanVC) {
+                    //     Console.WriteLine("SummaryLargerThanVC: True");
+                    //     Console.WriteLine("SummaryLargerThanVC: MethodName: {0}", key);
+                    // }
                 }
 
                 return true;
@@ -1908,7 +1908,7 @@ namespace CoreLib
                     outcome = CheckVC(reporter);
                     toExpand = reporter.callSitesToExpand;
                     
-                    Console.WriteLine("OQ Outcome: {0}, time:{1}, vcsize:{2}", outcome, (DateTime.Now - qStartTime).TotalSeconds, stats.vcSize);
+                    // Console.WriteLine("OQ Outcome: {0}, time:{1}, vcsize:{2}", outcome, (DateTime.Now - qStartTime).TotalSeconds, stats.vcSize);
                 }
 
                 if (outcome == Outcome.Errors)
@@ -2109,7 +2109,7 @@ namespace CoreLib
                 Pop(); //for inlining-frame
             }
 
-            summManager.LogInfo();
+            // summManager.LogInfo();
 
             Console.WriteLine("\n------------------------TiStats-----------------------------");
             Console.WriteLine("SummaryUsed: {0}", TiStats.SummaryUsed);
